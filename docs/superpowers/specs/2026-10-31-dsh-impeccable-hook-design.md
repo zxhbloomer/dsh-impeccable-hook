@@ -364,3 +364,9 @@ t9（验收汇总回写）连续两次撞同一用户并发上限（`PI_AI_ERROR
 1. `docs/completion-summary.md`：测试数 **91 → 92**（24 engine + 40 hook + 28 plugin）；`upstream.lock.json` 行改为 t13 后的真值（`tarballSha256 0af11ea7…557ba`、`tarballSource …/tar.gz/<commit>`、`fetchedAt 2026-10-31T11:20:42.894Z`）；§四 残留问题表加「历史快照」标注并列出 R2-1…R2-4 的处置结果（仅 N6 推迟 v1.1）。
 2. `docs/acceptance-evidence.md`：§三 测试数改为最终态 92 并写清 85→89→91→92 的演进来源（t6 / t10 / t12 / t13）；新增 §八，用一张表覆盖 §六 里的过期 lock 值（旧的分支版 `176f5ea7…` 明确标注作废），并记录 t13 带来的三个副作用（sync fail closed、MODIFICATIONS 全量列规则、verify.yml 增加 `tarballSource` 守卫）。
 3. **判读规则不变**：AC7 仍标「待推送后人工」、AC1/AC10 的第④层仍标「待人工」，本轮不因收尾而升级任何结论。
+
+### v0.2.4 → v0.2.5（S9：推送 GitHub + AC7 实测）
+
+1. 仓库推上 GitHub（public，`github.com/zxhbloomer/dsh-impeccable-hook`，首提交 `f4400dc`，默认分支 `main`），84 文件（含 `.gitignore`）。
+2. **AC7 由「待人工」升级为「通过」**：源码在干净 clone 后不装依赖即可 `npm test` 92/92；隔离 `DSH_HOME` 下 `dsh plugin --profile ac7 add github:zxhbloomer/dsh-impeccable-hook` 成功装成 0.1.0 并自动登记 bundle。取证见 `docs/acceptance-evidence.md` §九。
+3. 遗留：`.github/workflows/verify.yml` 因 `gh` token 缺 `workflow` scope 未能入库（本地保留），补推后 CI 才生效；AC1/AC10 第④层与 `findPluginEntry` 端到端仍需桌面会话人工确认。

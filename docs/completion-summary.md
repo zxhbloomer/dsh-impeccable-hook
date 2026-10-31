@@ -49,7 +49,7 @@
 | AC4 | 单次 hook < 200ms，超时不抛 | **通过** | ② | 最近真机首轮 **55ms**（历史 31–38ms / 评审亲测 43ms）；超时路径单测不抛 |
 | AC5 | 同文件同问题第二次不重复注入 | **通过（两条防线）** | ①② | 防线①引擎侧跨进程 claim（真机第二轮 `findings=0`）；防线②插件侧 `文件::规则` 指纹（单测 + 评审脚本 8/8/4/0、`dedup=20`、配额停 40） |
 | AC6 | `check-upstream.mjs` exit 0 且输出「已是最新」 | **通过** | ③ | 离线 `exit 0` + 「✓ 已是最新：包内快照 0.1.18 与 lock 一致。」；`--online` 亦 exit 0 |
-| AC7 | 干净 clone 后 `dsh plugin add github:…` 能装上生效 | **待推送后人工** | ③（仅本地等价） | 隔离 `DSH_HOME` 下 `dsh plugin add <绝对路径>` 装上 + `--dump-config` 渲染出插件层 + `remove` 全回退；**GitHub 形态未测**（仓库未 init/未推送） |
+| AC7 | 干净 clone 后 `dsh plugin add github:…` 能装上生效 | **通过（GitHub 形态已实测）** | ①③ | 干净 clone 不装依赖 `npm test` 92/92；隔离 `DSH_HOME` 下 `dsh plugin --profile ac7 add github:zxhbloomer/dsh-impeccable-hook` exit 0 / 14.4s / 装成 0.1.0；`bundles` 自动登记；`--dump-config` 渲染插件层 |
 | AC8 | 非白名单文件（.md/.java）hook 完全不被调用 | **通过** | ① | 扩展名在 `locateEngine` 之前放行：`locate.calls=0`、`engine.calls=0`、`extSkip+1`；`.md` 整链连 `engine.js` 都不进 |
 | AC9 | 20+ findings 只注入 ≤ top-N，计数一致 | **通过** | ① | 20 条 → 注入 8 条且计数一致；条数配额停 40；字符配额用例 |
 | AC10 | 破坏事件签名时启动自检失败且可见 | **通过（单测）｜④待人工** | ①+④ | 3 条单测（下游判定被改写 / 拿不到事件总线 / 启动 warning 恰好 1 行）；桌面端肉眼确认启动 warning 未执行 |
@@ -94,8 +94,9 @@
 |---|---|---|
 | LICENSE / NOTICE.md / 中文 README（原 B2 阻塞） | ✅ 已完成（t8），阻塞解除 | — |
 | skill 快照落地 + lock 填实（原 B1 阻塞） | ✅ 已完成（t10），阻塞解除 | — |
-| `git init` 与推 GitHub | ⬜ **未做** | **需用户当次明确指令**；合规上已无阻塞 |
-| AC7：推后用**干净 profile** `dsh plugin add github:zxhbloomer/dsh-impeccable-hook` | ⬜ 待推送后人工 | 依赖上一项 |
+| `git init` 与推 GitHub | ✅ 已完成（2026-10-31） | public 仓库 `github.com/zxhbloomer/dsh-impeccable-hook`，首个提交 `f4400dc`，默认分支 `main` |
+| AC7：推后用**干净 profile** `dsh plugin add github:…` | ✅ 已完成 | 隔离 `DSH_HOME` + `github:` spec 真装成功，详见 `acceptance-evidence.md` §九 |
+| `.github/workflows/verify.yml` **未入库** | ⚠️ 待补推 | 当前 `gh` OAuth token 只有 `gist/read:org/repo`，缺 `workflow` scope，GitHub 拒收工作流文件；文件已在本地工作区，执行 `gh auth refresh -s workflow` 后补推即可 |
 | AC1 第④层：桌面端手敲 `/impeccable-hook status`，肉眼确认「实际路径 = 包内路径」与注入计数 | ⬜ 待人工 | 用户执行（headless 会话无命令回显） |
 | AC10 第④层：破坏 `tools/post-execute` 签名后，启动时看到那行 warning | ⬜ 待人工 | 可与上一条同场做 |
 | `findPluginEntry` 的 `options.name` **端到端** | ⬜ 无法实测 | 本 profile 未安装本插件（`Config` provider `entries` 为空）；装插件后 `on`/`off` 顺手验一次真持久化 |

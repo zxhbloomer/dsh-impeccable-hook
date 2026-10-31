@@ -46,19 +46,22 @@
 
 ## 3. 安装
 
-> **当前状态**：本仓库尚未推送到 GitHub。**S9 步骤（推送到 `github.com/zxhbloomer/dsh-impeccable-hook`）完成并需要用户点头之后**，下面这条命令才可用。
-
 ```bash
-dsh plugin add github:zxhbloomer/dsh-impeccable-hook
+dsh plugin --profile web add github:zxhbloomer/dsh-impeccable-hook
 ```
 
-装完后：
+- 本插件**零运行时依赖、无 `prepare`/`build` 脚本**，GitHub 安装不触发任何构建（实测：干净 clone 直接 `npm test` 92/92 通过；隔离 `DSH_HOME` 下安装耗时 14.4s）。
+- 安装时 pnpm 可能打印一行 `Agent skills awaiting approval: dsh-impeccable-hook@…`（pnpm 12 对“随包分发 agent skill 的第三方包”的信任提示）。实测**不阻断**安装与 bundle 登记；想消掉提示可在 profile 目录执行 `pnpm approve`。
+- 装完后：
 
 1. 新开一个会话（插件在启动时 `apply()`）；
 2. 敲 `/impeccable-hook status`，确认引擎、skill 路径、开关三项；
-3. 敲 `/impeccable shape` 之类试一下 skill 是否可用。
+3. 敲 `/impeccable shape` 之类试一下 skill 是否可用；
+4. 恢复历史项目若想关掉体检：`/impeccable-hook off`。
 
 卸载：`dsh plugin remove dsh-impeccable-hook`。
+
+> CI（`.github/workflows/verify.yml`）尚未入库：当前 `gh` token 缺 `workflow` scope，推不上去。执行 `gh auth refresh -s workflow` 后补推即可，功能不受影响（该文件只是把 `npm test` / `check-upstream` / `node --check` 搬进 CI）。
 
 ---
 

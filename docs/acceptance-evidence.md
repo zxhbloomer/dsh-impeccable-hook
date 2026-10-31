@@ -14,7 +14,7 @@
 | AC4 单次 hook < 200ms | 通过（35ms） | 真机整链脚本首轮 35ms、次轮 38ms（多次实跑 31–38ms）；命中 level=user-skill，摘要缓存生效 | ② |
 | AC5 同文件同问题第二次不重复注入（**两条独立防线**） | 通过 | 防线①（引擎侧、跨进程）：真机第二轮 `additionalContexts` 长度 0、`findings=0`，状态落在 `~/.impeccable/hook-claims`（**不是插件的去重**）；防线②（插件侧、进程内）：`lib/hook.js` 的 `文件::规则` 指纹去重，由 `test/hook.test.mjs`（`AC5：同文件同规则第二次不再注入`、`AC5：换文件后同样的规则允许再注入一次`）+ 评审独立脚本（20 条 findings 四轮 8/8/4/0、`dedup=20`、条数配额停 40）证明 | ①② |
 | AC6 `check-upstream.mjs` exit 0 | 通过 | `node scripts/check-upstream.mjs` → exit 0；`--online` → exit 0 且「上游 main 的 skill 版本 0.1.18 与 lock 一致」 | ③ |
-| AC7 干净 clone 后 `dsh plugin add github:…` 装上生效 | **待 S9**（仓库未推 GitHub）｜本地等价路径已验证 | t5：隔离 `DSH_HOME` 下 `dsh plugin --profile headless add <绝对路径>` → pnpm `link:` 装上 0.1.0、`dsh.profile.bundles` 自动登记、`--dump-config` 渲染 `# == dsh-impeccable-hook` 层；`remove` 后全部回退 | ③ |
+| AC7 干净 clone 后 `dsh plugin add github:…` 装上生效 | **通过（已实测 GitHub 形态）** | ① 干净 clone `https://github.com/zxhbloomer/dsh-impeccable-hook`（83 文件）后**不装任何依赖**直接 `npm test` → 92/92 pass；② 隔离 `DSH_HOME`（`%TEMP%c7-home2`）下 `dsh plugin --profile ac7 add github:zxhbloomer/dsh-impeccable-hook` → pnpm 解析到 `https://codeload.github.com/zxhbloomer/dsh-impeccable-hook/tar.gz/f4400dc…`、14.4s 装上 `dsh-impeccable-hook 0.1.0`（无 build、无 prepare）；③ 该 profile `dsh.profile.bundles` 自动登记为 `["@deepseek-ai/dsh-base","dsh-impeccable-hook"]`；④ `dsh --profile ac7 --dump-config` 渲染出 `# == dsh-impeccable-hook` 层（第 363–365 行）；⑤ 包内 `skills/impeccable` 59 文件随 tarball 落地（见 §九） | ①③ |
 | AC8 非白名单文件完全不被调用 | 通过（零引擎调用） | `test/hook.test.mjs`：`AC8：白名单外扩展名在调引擎之前就放行`（`locate.calls=0`、`engine.calls=0`、`extSkip+1`）；`test/plugin.test.mjs`：`整链：白名单外扩展名（.md）连 engine.js 都不进（AC8）`（共享日志 `calls` 与 `noEngine` 增量均为 0） | ① |
 | AC9 20+ findings 的 .vue 注入 ≤ top-N 且计数一致 | 通过（单测） | `test/hook.test.mjs`：`AC9：20 条 findings 按 top-N 只注入 8 条，计数一致`、`topN 可配置`、`会话条数配额用尽后记 quota`、`字符配额：注入文本不超过剩余字符预算` | ① |
 | AC10 破坏事件签名时启动自检失败可见 | 通过（单测）｜**待人工确认**（真机启动 warning） | `test/plugin.test.mjs`：`AC10：自检发现下游判定被改写时失败并给出原因`、`AC10：拿不到事件总线时自检也失败（而不是静默）`；`runStartupSelfCheck` 失败时 `handle.selfCheck.ok=false` + `ctx.logger.warn` 一行 + status 返回 `kind='error'` | ①④ |
@@ -64,7 +64,7 @@ skill 解析   C:\Users\Administrator\.dsh\skills\impeccable\SKILL.md
 
 1. 桌面端会话手敲 `/impeccable-hook status`，肉眼确认「实际解析路径 = 包内路径」与注入计数。
 2. 破坏 `tools/post-execute` 签名场景下，启动时能看到那行 warning。
-3. AC7：仓库推上 GitHub 后，用干净 profile 执行 `dsh plugin add github:zxhbloomer/dsh-impeccable-hook` 验证（依赖 S9 与用户点头）。
+3. ~~AC7：仓库推上 GitHub 后验证~~ —— **已于 2026-10-31 完成**（隔离 `DSH_HOME` + `github:` spec 真装，见 §九），不再是待人工项。
 
 ## 五、本轮顺带修掉的真实缺陷（取证时发现）
 
@@ -136,3 +136,18 @@ AC1–AC10 的最终判定与证据层级见设计文档 §9.2 与 `docs/complet
 | `fetchedAt` | `2026-10-31T11:20:42.894Z` |
 
 同步副作用：`sync-upstream.mjs` 在拿不到 commit 时 **fail closed**（宁可失败也不写分支快照）；`skills/impeccable/MODIFICATIONS.md` 的规则清单改为全量遍历（命中 0 处也照实写）；`.github/workflows/verify.yml` 增加守卫——`tarballSource` 必须含 commit、不许含 `refs/heads`。快照内容零变化（逐文件 sha256 对照 0 差异，指纹仍 `c2f3c2e0…`）。
+
+## 九、推送后 AC7 实测（2026-10-31，GitHub 形态）
+
+| # | 动作 | 实测结果 |
+|---|---|---|
+| 1 | `git push` 到 `github.com/zxhbloomer/dsh-impeccable-hook`（public，默认分支 `main`） | 提交 `f4400dc`；远端 83 个 blob |
+| 2 | 干净 clone 后**不装依赖**直接 `npm test` | `tests 92 / pass 92 / fail 0 / skipped 0`，662ms（插件零运行时依赖，`prepare` 不存在 ⇒ GitHub 安装不触发任何构建） |
+| 3 | 隔离 `DSH_HOME` 下 `dsh plugin --profile ac7 add github:zxhbloomer/dsh-impeccable-hook` | exit 0，14.4s；pnpm 拉 `codeload.github.com/…/tar.gz/f4400dc…`，装成 `dsh-impeccable-hook 0.1.0` |
+| 4 | 检查 profile 登记 | `dependencies` = `github:zxhbloomer/dsh-impeccable-hook`；`dsh.profile.bundles` = `["@deepseek-ai/dsh-base","dsh-impeccable-hook"]` |
+| 5 | `dsh --profile ac7 --dump-config` | 第 363–365 行渲染出 `# == dsh-impeccable-hook` / `- id: dsh-impeccable-hook` |
+| 6 | 检查包内容 | `skills/impeccable` 59 文件随包落地；`deps: {}`、`scripts` 只有 `test` |
+
+安装时 pnpm 打印一行 `Agent skills awaiting approval: dsh-impeccable-hook@https://codeload.github.com/…`（pnpm 12 对“随包分发 agent skill 的第三方包”的信任提示）。实测**不阻断**安装与 bundle 登记；若用户希望消掉该提示，可在该 profile 目录执行 `pnpm approve`。此现象已写入 README §安装注意事项。
+
+**仍未做的（不变）**：AC1 第④层（桌面端手敲 `/impeccable-hook status`）、AC10 第④层（破坏签名看启动 warning）、`findPluginEntry` 的 `options.name` 端到端 —— 三项都需要真实凭据的桌面会话。
