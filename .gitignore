@@ -17,7 +17,3 @@ tmp/
 Thumbs.db
 .idea/
 .vscode/
-
-# CI 工作流：当前 gh token 缺 workflow scope 推不上去，文件先留在工作区。
-# 拿到 scope（gh auth refresh -s workflow）后删掉下面这行即可正常提交。
-.github/workflows/verify.yml

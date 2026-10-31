@@ -1,0 +1,56 @@
+name: verify
+
+# v1 只做这一个 workflow（设计 §5：语法 + 单测）。
+# 每日上游巡检（upstream-check.yml）在设计的「不创建」清单里，推迟 v1.1（N6）；
+# 现在巡检靠手动 `node scripts/check-upstream.mjs --online`。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: verify (${{ matrix.os }} / node ${{ matrix.node }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows 必须进矩阵：本插件的路径闸门（盘符 + 反斜杠）、spawn 行为、
+        # 引擎 exe 命名都只在 Windows 上才真正被覆盖（C9）。
+        os: [ubuntu-latest, windows-latest]
+        node: ['22']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # 零依赖（D8/C8：纯 JS 入库、无构建），所以不跑 npm install。
+      - name: 语法检查（lib + scripts + test）
+        shell: bash
+        run: |
+          set -e
+          for file in lib/*.js scripts/*.mjs test/*.mjs; do
+            node --check "$file"
+          done
+
+      - name: 单元测试
+        run: npm test
+
+      - name: lock 可解析且字段齐全
+        shell: bash
+        run: |
+          node -e "
+            const lock = require('./upstream.lock.json')
+            for (const key of ['repo', 'ref', 'skillVersion', 'engineVersion', 'tarballSha256', 'tarballSource']) {
+              if (lock[key] === undefined) { console.error('upstream.lock.json 缺字段: ' + key); process.exit(1) }
+            }
+            // R2-2：tarball 必须钉 commit 而不是移动分支，否则 tarballSha256 事后无法复算（G4）。
+            if (!lock.tarballSource.includes(lock.commit) || lock.tarballSource.includes('refs/heads')) {
+              console.error('tarballSource 必须指向 commit 快照: ' + lock.tarballSource); process.exit(1)
+            }
+            console.log('lock ok: skill=' + lock.skillVersion + ' engine=' + lock.engineVersion + ' tarball=' + lock.tarballSource)
+          "
