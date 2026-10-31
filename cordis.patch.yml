@@ -1,0 +1,13 @@
+# dsh-impeccable-hook bundle patch：把本插件插进宿主插件表。
+#
+# 只有一行 insert —— 本插件自己向 skills 注册表注册 provider、自己监听
+# tools/post-execute，不依赖任何 agent preset 配合。后加载的层（profile 自己的
+# cordis.patch.yml、--patch 覆盖）仍可按 id `dsh-impeccable-hook` 定向改 config。
+- insert:
+    - id: dsh-impeccable-hook
+      name: 'dsh-impeccable-hook'
+      config:
+        hook:
+          # design hook 总开关：`/impeccable-hook on|off` 改的就是这里（设计 D3）。
+          # S2 骨架阶段仅占位，S4 起的 hook 链路才读取此值。
+          enabled: true

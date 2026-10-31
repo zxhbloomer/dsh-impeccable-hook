@@ -1,0 +1,39 @@
+{
+  "name": "dsh-impeccable-hook",
+  "version": "0.1.0",
+  "description": "把 impeccable 设计 skill 随包分发到 DeepSeek Harness，并在工具执行后回灌 design hook 检测结论（非官方插件）",
+  "private": false,
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "skills",
+    "scripts",
+    "upstream.lock.json",
+    "cordis.patch.yml",
+    "LICENSE",
+    "NOTICE.md",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "skills",
+    "impeccable",
+    "design-hook"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

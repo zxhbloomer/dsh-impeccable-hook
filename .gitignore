@@ -1,0 +1,19 @@
+# 依赖与构建产物
+node_modules/
+*.tgz
+
+# 本地临时与取证目录（各任务留下的 .tmp-* 一律不入库）
+.tmp-*/
+tmp/
+*.log
+
+# 上游引擎跑 hook 时在工程内产生的状态（团队共享配置 config.json 若需要共享可解除忽略）
+.impeccable/hook.cache.json
+.impeccable/audit.ndjson
+.impeccable/config.local.json
+
+# 编辑器与系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,17 @@
+{
+  "$comment": "出生证明（G4/D7）：记录包内 skill 快照来自上游哪个 commit、两个版本号。由 scripts/sync-upstream.mjs 写入，不要手改。tarballSha256 对应 tarballSource 里的 commit 快照（钉 commit 不钉分支），因此可随时复算校验。",
+  "schemaVersion": 1,
+  "repo": "pbakaus/impeccable",
+  "repoUrl": "https://github.com/pbakaus/impeccable",
+  "ref": "main",
+  "commit": "b7a89176e4e87422b40f98adabceb051dbb5448b",
+  "fetchedAt": "2026-10-31T11:20:42.894Z",
+  "skillVersion": "0.1.18",
+  "engineVersion": "0.1.18",
+  "cliVersion": "4.8.0",
+  "sourcePath": ".dsh/skills/impeccable",
+  "snapshotPath": "skills/impeccable",
+  "checksumsFile": "scripts/engine-checksums.txt",
+  "tarballSha256": "0af11ea7f3d0accd91ea7c52bbe53e4e01c6a9505693617e9ac2c676767557ba",
+  "tarballSource": "https://codeload.github.com/pbakaus/impeccable/tar.gz/b7a89176e4e87422b40f98adabceb051dbb5448b"
+}
