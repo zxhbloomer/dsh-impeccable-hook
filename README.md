@@ -59,6 +59,20 @@ dsh plugin --profile web add github:zxhbloomer/dsh-impeccable-hook
 3. 敲 `/impeccable shape` 之类试一下 skill 是否可用；
 4. 恢复历史项目若想关掉体检：`/impeccable-hook off`。
 
+### 装完即用：skill 与引擎都由本插件备齐
+
+**你不需要另外装任何东西**——skill 随包分发（`skills/impeccable/`，59 个文件），引擎由插件自己备齐：
+
+| 阶段 | 行为 |
+|---|---|
+| **首次启动** | `apply()` 完成后**异步**触发一次 `ensureEngine`：缓存里没有引擎就后台下载官方 Release（约 20MB，sha256 校验后原子落地），**不 await、不阻塞 DSH 启动** |
+| **下载失败 / 断网** | **只打一行 warning，不重试、绝不抛错**；hook 退化为「无引擎」计数（热路径照旧不联网），`log` 里能看到「两级引擎链全部失败…hook 静默关闭」，`status` 同时给逐级原因 |
+| **手动兜底** | `/impeccable-hook status download` 显式下载（临时文件 → 校验 sha256 → 原子 rename，失败不留半截文件）；内网可先设 `IMPECCABLE_DOWNLOAD_BASE` 指向镜像 |
+| **想关掉自动下载** | 配置 `hook.autoDownload: false`（默认 `true`）。关掉后不自动补引擎，其它行为不变 |
+| **重复触发** | 同一进程内只尝试一次：并发/重复加载复用同一 Promise，绝不会下两份 |
+
+> 为什么不用 `postinstall` 下载：DSH 用 pnpm 装插件，而 pnpm 默认**不执行**依赖包的构建脚本（`onlyBuiltDependencies` / `ignoredBuiltDependencies` 策略由宿主决定）。把 20MB 下载放进 `postinstall`，等于让「装插件」的结果取决于宿主的 pnpm 策略——所以放到首次启动的异步任务里，装插件这一步保持纯拷贝、无构建。
+
 卸载：`dsh plugin remove dsh-impeccable-hook`。
 
 > CI 已随仓库发布：`.github/workflows/verify.yml` 在每次推送时跑 `npm test`（node 22，ubuntu + windows 双平台）、`check-upstream.mjs` 与 `node --check`。
@@ -83,7 +97,7 @@ dsh plugin --profile web add github:zxhbloomer/dsh-impeccable-hook
 | **hook 开关** | 开 / 关，以及 `config.hook.enabled` 的实际值 |
 | **启动自检** | `tools/post-execute` 是否挂上、`PostToolDecision` 形状是否存活；失败时命令标红（`kind=error`）并打印原因——含义是本版插件与当前 DSH 契约不匹配，hook 不会生效 |
 | **skill 解析** | **实际解析到的 `SKILL.md` 绝对路径**、`provider=` / `source=` / 视图（`scoped` 或 `global`）、与包内路径「一致 ✓ / 不一致 ✗」。不一致说明同层有更高优先级的同名 skill 顶掉了包内副本 |
-| **引擎** | `level=`（①用户级已装 / ②`~/.impeccable` 缓存 / ③官方下载）、`label=`、`path=`、版本（与 lock 钉死版本并排）、`verified=`、摘要校验结论、深度体检（`engine-probe` 自报的版本）。找不到时打印「未找到（三级降级全部失败）」+ 逐级失败原因 |
+| **引擎** | `level=`（①`user-cache` 共用缓存 `~/.impeccable` / ②`download` 官方 Release 下载）、`label=`、`path=`、版本（与 lock 钉死版本并排）、`verified=`、摘要校验结论、深度体检（`engine-probe` 自报的版本）。**`verified` 有三态**：`true` 摘要与清单一致；`null` 清单未收录该版本/平台（或二进制读不动、上游没发对应资产）——不是「通过」，会显示「摘要校验 …未收录」；`false` 不会出现在可用引擎上（摘要不符直接跳过该级）。找不到时打印「未找到（两级降级全部失败）」+ 逐级失败原因 |
 | **注入统计** | 已注入 N 次 / M 条 / K 字符；去重跳过、配额用尽；引擎调用次数、超时、无引擎、错误、白名单外跳过；上次结果 `ok\|timeout\|no-engine\|dedup\|error\|…` 与时间 |
 | **会话配额** | 已用 findings 数 / 上限、已用字符 / 上限、top-N 当前值 |
 | **版本三件套** | 插件版本、内置快照版本、快照漂移（一致 / 落后 / 领先）、引擎版本、出生证明（`upstream.lock.json` 的 repo@ref 与抓取时间）、上游巡检提示 |
@@ -95,7 +109,14 @@ dsh plugin --profile web add github:zxhbloomer/dsh-impeccable-hook
 - 把 `hook.enabled=<true|false>` 写回**插件 config**（profile 的 `cordis.patch.yml` 里本插件那一行）；
 - **绝不写**用户仓库的 `.impeccable/config.json`（那份是只读的，引擎自己会写）。
 
-若 `configEditor` 服务不可用或定位不到插件行，命令会明确说「本会话已生效，但**没能持久化**」，并给出要手改的键。
+若 `configEditor` 服务不可用或定位不到插件行，命令会 `kind=error` 并在文案里明说：**本会话已生效、但没能持久化**，同时给出要手改的键（原文见下）——
+
+```text
+已把 hook 切换为「关」（本会话立即生效），但 configEditor 服务不可用，**没能持久化**。
+请手动把 profile 里本插件的 config 改成 hook.enabled=false（通常是 cordis.patch.yml 的 config 段）。
+```
+
+即：`kind=error` **不代表开关没生效**——运行期开关已经切了（hook 每轮读 switch），只是没写回配置，重开 profile 会回到原来的值。
 
 #### `log [n]`
 
@@ -121,23 +142,24 @@ dsh plugin --profile web add github:zxhbloomer/dsh-impeccable-hook
 
 ---
 
-## 5. 引擎三级降级与「热路径不下载」
+## 5. 引擎两级降级与「热路径不下载」
 
-引擎是可执行文件（`impeccable[.exe]`），按以下顺序查找，命中即用：
+引擎是可执行文件（`impeccable[.exe]`），只有**两级**，按顺序查找，命中即用：
 
-| 顺序 | 来源 | 说明 |
-|---|---|---|
-| ① `user-skill` | `$DSH_HOME/skills/impeccable/scripts/bin/<os>-<arch>/impeccable[.exe]` | 用户自己装过 skill 的那一份 |
-| ② `user-cache` | `~/.impeccable/bin/<engineVersion>/impeccable[.exe]` | 上游 launcher 的标准版本化缓存位 |
-| ③ `download` | `https://github.com/pbakaus/impeccable/releases/download/engine-v<ver>/impeccable-<os>-<arch>[.exe]` | 约 20MB，按 `engine-checksums.txt` 校验 sha256 |
+| 顺序 | level | 位置 | 说明 |
+|---|---|---|---|
+| ① | `user-cache` | `~/.impeccable/bin/<engineVersion>/impeccable[.exe]` | **引擎共用缓存**。`~/.impeccable` 既是本插件的缓存根，也是上游 skill launcher 的默认查找位置——两边因此共用**同一份**引擎，物理上只有一份，不是「上游残留」。摘要与 `engine-checksums.txt` 不符则**跳过该级**（不降级使用未校验的二进制） |
+| ② | `download` | `https://github.com/pbakaus/impeccable/releases/download/engine-v<ver>/impeccable-<os>-<arch>[.exe]` | 约 20MB，按 `engine-checksums.txt` 校验 sha256；**只有 `allowDownload:true` 才走**（即 `/impeccable-hook status download` 与首次启动的自动备齐），流程为「写临时文件 → 校验 sha256 → 原子 rename」，任何一步失败都不留脏文件 |
 
 全部失败 ⇒ **不抛错、不做副作用**，返回 `{ available:false, reason, attempts }`；skill 照常可用，hook 静默关闭，`status` 逐级说明原因（AC3）。
 
-**热路径不下载（D12）**：hook 每次编辑都会定位引擎，但只**定位**（`locateEngine`，`allowDownload:false`），永不联网。下载只发生在显式动作 `/impeccable-hook status download`，流程为「写临时文件 → 校验 sha256 → 原子 rename」，任何一步失败都不留脏文件。
+> 引擎只此两处来源，**不存在「借用某个已装 skill 目录里附带的那份引擎」这一层**：`$DSH_HOME/skills/impeccable` 即便存在也不参与解析，插件只认包内 `skills/impeccable` 与上面两级引擎。
+
+**热路径不下载（D12）**：hook 每次编辑都会定位引擎，但只**定位**（`locateEngine`，`allowDownload:false`），永不联网。会联网的只有两处：首次启动的自动备齐（`hook.autoDownload`，可关），与显式的 `/impeccable-hook status download`。
 
 引擎版本**只读 `scripts/VERSION`**（C10）——`impeccable --version` 返回的是 **skill 版本**（4.8.0），不能用它判断引擎版本。
 
-其他约定：Windows 必须交出真实 win32 绝对路径（盘符 + 反斜杠），POSIX 风格路径会让引擎静默 `exit 0`；引擎版本与 lock 钉死版本不一致时不静默，记 warning 并在 `status` 可见；上游没有 Windows-on-ARM 资产，arm64 机器如实报「不支持」，不拿 x64 摘要顶替。
+其他约定：Windows 必须交出真实 win32 绝对路径（盘符 + 反斜杠），POSIX 风格路径会让引擎静默 `exit 0`；两种不一致都不静默但处理不同——二进制摘要与 `engine-checksums.txt` 不符时**跳过该级**并在 `status` 逐级写明原因（不加载来路不明的引擎），引擎自述版本与 lock 钉死版本不一致时**仍可用**，但 `status` 会把两个版本并排列出并记一次 warning；上游没有 Windows-on-ARM 资产，arm64 机器如实报「不支持」，不拿 x64 摘要顶替。
 
 ---
 
@@ -154,6 +176,7 @@ dsh plugin --profile web add github:zxhbloomer/dsh-impeccable-hook
       config:
         hook:
           enabled: true              # design hook 总开关（/impeccable-hook on|off 改的就是它）
+          autoDownload: true         # 首次启动是否后台自动备齐引擎（默认 true；false 则不自动下载）
           topN: 8                    # 单次最多注入多少条 findings（1–100）
           maxFindingsPerSession: 40  # 全会话 findings 配额（1–10000 条）
           maxCharsPerSession: 12000  # 全会话字符配额（500–200000）
@@ -174,9 +197,9 @@ dsh plugin --profile web add github:zxhbloomer/dsh-impeccable-hook
 | `skills/impeccable/` | 上游 skill 快照（`SKILL.md`、`reference/`、`scripts/`、`MODIFICATIONS.md`） |
 | `upstream.lock.json` | 出生证明：`skillVersion` / `engineVersion` / `cliVersion` / `commit` / `fetchedAt` / `tarballSha256` |
 | `cordis.patch.yml` | bundle patch，把本插件插进宿主插件表 |
-| `$DSH_HOME`（默认 `~/.dsh`） | DSH 家目录；①级引擎位置、同层 skill 冲突都发生在这里 |
-| `IMPECCABLE_HOME`（默认 `~/.impeccable`） | ②级引擎缓存根 |
-| `IMPECCABLE_DOWNLOAD_BASE` | ③级下载通道覆盖（默认上游 Release 地址） |
+| `$DSH_HOME`（默认 `~/.dsh`） | DSH 家目录；同层 skill 冲突（若有）发生在这里。**它不再是引擎来源**——`$DSH_HOME/skills/impeccable` 里的引擎不参与解析 |
+| `IMPECCABLE_HOME`（默认 `~/.impeccable`） | ①级引擎**共用缓存**根：`<它>/bin/<engineVersion>/impeccable[.exe]` + `.verified` 戳。上游 launcher 默认也看这里，两边共用同一份 |
+| `IMPECCABLE_DOWNLOAD_BASE` | ②级下载通道覆盖（默认上游 Release 地址） |
 | `<工程>/.impeccable/config.json`、`hook.cache.json` | **引擎自己写**的工程级缓存；本插件只读不写。跨进程也会压住重复注入，所以演示「首次注入」要换新工程目录 + 新 session |
 
 ### 维护者操作（不需要终端用户执行）
@@ -196,17 +219,20 @@ npm test                                   # node --test 全量单测
 
 先跑 `/impeccable-hook status`，看「引擎」区块：
 
-- `引擎 未找到（三级降级全部失败）` → 下面会逐级列出原因（文件不存在 / 不是原生绝对路径 / sha256 不符 / 清单没收录该平台资产）；
+- `引擎 未找到（两级降级全部失败）` → 下面会逐级列出原因（文件不存在 / 不是原生绝对路径 / sha256 不符 / 清单没收录该平台资产）；
+- **刚装完就报 no-engine**：首次启动的自动下载可能还没完成（20MB，视网络 3 秒到数分钟）。等一会儿再跑 `status`，或直接 `/impeccable-hook status download` 同步下载；也可以在 `log` 里看到「引擎自动就绪失败」那一行 warning；
 - 需要插件下载官方引擎：`/impeccable-hook status download`（约 20MB，sha256 校验）；内网可先设 `IMPECCABLE_DOWNLOAD_BASE` 指向镜像；
-- 卸载/损坏的缓存会被忽略（sha256 对不上就不使用），删掉重下即可；
+- 卸载/损坏的缓存会被忽略（sha256 对不上就**跳过该级**，不会降级使用未校验的二进制），删掉重下即可；
+- 自动下载被关掉了？配置 `hook.autoDownload: false` 时不会自动补引擎，需手动 `status download`；
 - **Windows-on-ARM** 上上游没有 arm64 引擎，如实报不支持，不会拿 x64 顶替。
 
-### 7.2 skill 双来源冲突（`/impeccable` 打开的是旧版 skill）
+### 7.2 skill 解析与包内路径「不一致 ✗」
 
-`status` 的「skill 解析」会同时给出**实际解析到的 `SKILL.md` 绝对路径**与「与包内路径 一致 ✓/✗」：
+本机只应有**一份** impeccable skill：包内的 `skills/impeccable`。`status` 的「skill 解析」会给出**实际解析到的 `SKILL.md` 绝对路径**与「与包内路径 一致 ✓/✗」：
 
-- ✗ 说明同层有更高优先级的同名 skill（最常见：`$DSH_HOME/skills/impeccable` 你自己装过一份），包内副本没生效；
-- 处理：删掉/改名那份用户级 skill，或调整优先级后重启会话；插件**不会**自动删用户文件；
+- ✓ 正常：用的就是包内快照；
+- ✗ 说明同层另有更高优先级/同名的 impeccable skill（例如别的插件也提供了同名 skill，或你曾在 skills 目录手放过一份），包内副本没生效——此时 `/impeccable` 跑的是**另一份** skill 的正文；
+- 处理：按 `status` 打印的**实际路径**去定位那一份，自行移走或调优先级后重启会话；插件**不会**自动删任何文件，也不会去猜；
 - 判断依据永远是**实际路径**，不是猜。
 
 ### 7.3 改了 UI 文件但「无回显」（下一轮没有 `[impeccable@1]`）
@@ -225,7 +251,8 @@ npm test                                   # node --test 全量单测
 
 - `status` 里「快照漂移 快照 X 落后于 lock Y」⇒ 包打错了，维护者应跑 `scripts/sync-upstream.mjs`；
 - 「出生证明 未找到 `upstream.lock.json`」⇒ 打包漏文件；
-- `on/off` 报「没能持久化」⇒ 手改 profile 的 `cordis.patch.yml` 里 `hook.enabled`。
+- `on/off` 返回 `kind=error` + 「没能持久化，请手动改 profile 里本插件的 config 段（通常是 `cordis.patch.yml` 的 config 段）」⇒ 本会话的开关**已经生效**，缺的只是落盘；按提示把 `hook.enabled` 手改掉即可（`configEditor` 服务缺失与「定位不到插件行」两种成因文案不同，都属这一类）；
+- `on/off` 返回 `kind=success` 但下次启动又变了 ⇒ 配置被别处覆盖（profile 里同一 `id` 出现两次，或改的是另一个 profile）。
 
 ### 7.5 已知盲区（如实说明，来自第二轮评审 R2-4）
 

@@ -11,7 +11,8 @@
 // 这些用例不联网、不用真引擎（引擎用 engineResolver 注入假对象）。
 
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { existsSync, readdirSync } from 'node:fs'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
@@ -25,6 +26,7 @@ import {
   renderStatus,
   setEnabled
 } from '../lib/commands.js'
+import { enginePaths, ensureEngine, resetEnsureState, resolveEngine } from '../lib/engine.js'
 import { apply, runStartupSelfCheck } from '../lib/index.js'
 import { createHookLog, getSharedLog } from '../lib/log.js'
 import { buildVersionReport, compareVersions, readLock } from '../lib/version.js'
@@ -122,7 +124,7 @@ test('AC1：status 打印实际路径并判定与包内路径一致', async () =
     handle: createHandle(),
     pkgRoot: PKG_ROOT,
     skillDir,
-    engineResolver: async () => ({ available: false, reason: '测试夹具：三级全失败' })
+    engineResolver: async () => ({ available: false, reason: '测试夹具：两级全失败' })
   })
   assert.equal(result.kind, 'success')
   assert.ok(result.text.includes(packaged), '必须打印实际解析到的绝对路径')
@@ -140,7 +142,7 @@ test('AC1：实际路径不是包内那份时明确打印「不一致」', async
     handle: createHandle(),
     pkgRoot: PKG_ROOT,
     skillDir,
-    engineResolver: async () => ({ available: false, reason: '测试夹具：三级全失败' })
+    engineResolver: async () => ({ available: false, reason: '测试夹具：两级全失败' })
   })
   assert.ok(result.text.includes(foreign))
   assert.match(result.text, /不一致 ✗/)
@@ -156,39 +158,20 @@ test('AC3：引擎缺失时 status 写明未找到与原因，并给出下载入
     skillDir: join(PKG_ROOT, 'skills', 'impeccable'),
     engineResolver: async () => ({
       available: false,
-      reason: '三级降级全部失败；skill 照常可用，hook 静默关闭',
-      attempts: [{ level: 'user-skill', label: '用户级已装', ok: false, reason: '不存在' }]
+      reason: '两级降级全部失败；skill 照常可用，hook 静默关闭',
+      attempts: [{ level: 'user-cache', label: '①共用缓存 ~/.impeccable', ok: false, reason: '不存在' }]
     })
   })
   assert.equal(result.kind, 'success')
   assert.match(result.text, /未找到/)
-  assert.match(result.text, /三级降级全部失败/)
+  assert.match(result.text, /两级降级全部失败/)
   assert.match(result.text, /status download/)
-  assert.match(result.text, /user-skill/)
+  assert.match(result.text, /共用缓存/)
 })
 
-test('verified:false 时两个版本号并排显示', async () => {
-  const { ctx } = createFakeCtx({ skills: createSkills(join(PKG_ROOT, 'skills', 'impeccable', 'SKILL.md')) })
-  const result = await renderStatus({
-    ctx,
-    handle: createHandle(),
-    pkgRoot: PKG_ROOT,
-    skillDir: join(PKG_ROOT, 'skills', 'impeccable'),
-    engineResolver: async () => ({
-      available: true,
-      level: 'user-skill',
-      label: '用户级已装',
-      path: 'C:\\fake\\impeccable.exe',
-      engineVersion: '0.1.17',
-      verified: false,
-      verifyReason: 'sha256 与 engine-checksums.txt 不符',
-      warning: '本机引擎版本与内置钉死版本不同'
-    })
-  })
-  assert.match(result.text, /0\.1\.17 ≠ 钉死 0\.1\.18/)
-  assert.match(result.text, /verified=false/)
-  assert.match(result.text, /sha256 与 engine-checksums\.txt 不符/)
-})
+// 注意：这里不再有「注入 verified:false 的假对象」用例 —— t16 之后引擎侧摘要不符一律跳级，
+// verified:false **到不了** status。该渲染分支的可达输入是 verified=null（清单未收录）与 lock 漂移，
+// 两者都用真实代码产出的状态覆盖，见文件末尾「v0.3 Task3 附带的 D 项」两条用例。
 
 test('AC10：启动自检失败时 status 标红（kind=error）', async () => {
   const { ctx } = createFakeCtx({ skills: createSkills(join(PKG_ROOT, 'skills', 'impeccable', 'SKILL.md')) })
@@ -279,8 +262,8 @@ test('status：打一行深度体检（engine-probe 无响应也不影响「可�
     skillDir,
     engineResolver: async () => ({
       available: true,
-      level: 'user-skill',
-      label: '①用户级已装 skill 的引擎',
+      level: 'user-cache',
+      label: '①共用缓存 ~/.impeccable',
       path: join(tmpdir(), 'no-such-impeccable-engine-xyz.exe'),
       engineVersion: '0.1.18',
       verified: true
@@ -349,7 +332,8 @@ test('AC10：拿不到事件总线时自检也失败（而不是静默）', asyn
 
 test('apply()：挂 tools/post-execute、注册命令、不抛错', async () => {
   const { ctx, listeners, commands } = createFakeCtx({ skills: createSkills(join(PKG_ROOT, 'skills', 'impeccable', 'SKILL.md')) })
-  const disposers = apply(ctx, { hook: { enabled: true } })
+  // autoDownload 显式关掉：本用例只验挂载，不该顺手触发一次下载（下载有专门用例）。
+  const disposers = apply(ctx, { hook: { enabled: true, autoDownload: false } })
   assert.equal(listeners.filter((item) => item.event === 'tools/post-execute').length, 1)
   assert.equal(commands.length, 1)
   assert.equal(commands[0].name, 'impeccable-hook')
@@ -361,7 +345,7 @@ test('apply()：挂 tools/post-execute、注册命令、不抛错', async () => 
 test('apply()：commands 服务不可用时不拖垮插件，但要 warning', async () => {
   const { ctx, listeners, warnings } = createFakeCtx({ skills: createSkills(join(PKG_ROOT, 'skills', 'impeccable', 'SKILL.md')) })
   ctx.commands = undefined
-  const disposers = apply(ctx, {})
+  const disposers = apply(ctx, { hook: { autoDownload: false } })
   assert.deepEqual(disposers, [])
   assert.equal(listeners.filter((item) => item.event === 'tools/post-execute').length, 1, 'hook 仍然要挂上')
   assert.ok(warnings.some((message) => message.includes('命令注册失败')))
@@ -455,7 +439,8 @@ test('整链：index.js → hook.js → engine.js 热路径 fetch 调用数为 0
   const before = getSharedLog().stats()
   try {
     const { ctx, listeners } = createFakeCtx({ skills: createSkills(join(PKG_ROOT, 'skills', 'impeccable', 'SKILL.md')) })
-    apply(ctx, { hook: { enabled: true } })
+    // 关掉自动下载：本用例度量「热路径本身」的网络请求数（评审 B2）。
+    apply(ctx, { hook: { enabled: true, autoDownload: false } })
     const listener = pickHookListener(listeners)
 
     const decision = { kind: 'accept', value: 'tool-result' }
@@ -474,7 +459,7 @@ test('整链：index.js → hook.js → engine.js 热路径 fetch 调用数为 0
     assert.equal(after.calls - before.calls, 0, '引擎一次都没被调起来（所以 calls 不增）')
     assert.equal(after.noEngine - before.noEngine, 1, '由 engine.js 的 locateEngine() 报「找不到引擎」')
     assert.equal(after.last.result, 'no-engine')
-    assert.match(after.last.reason, /三级降级|静默关闭/, '原因要能解释给用户（AC3）')
+    assert.match(after.last.reason, /静默关闭/, '原因要能解释给用户（AC3）')
   } finally {
     sandbox.restore()
   }
@@ -487,7 +472,8 @@ test('整链：白名单外扩展名（.md）连 engine.js 都不进（AC8）', 
   const before = getSharedLog().stats()
   try {
     const { ctx, listeners } = createFakeCtx({ skills: createSkills(join(PKG_ROOT, 'skills', 'impeccable', 'SKILL.md')) })
-    apply(ctx, { hook: { enabled: true } })
+    // 关掉自动下载：本用例度量「热路径本身」的网络请求数（评审 B2）。
+    apply(ctx, { hook: { enabled: true, autoDownload: false } })
     const listener = pickHookListener(listeners)
 
     const decision = { kind: 'accept', value: 42 }
@@ -516,7 +502,7 @@ test('整链：hook.enabled=false 时零引擎调用（不是只 return next 却
   const before = getSharedLog().stats()
   try {
     const { ctx, listeners } = createFakeCtx({ skills: createSkills(join(PKG_ROOT, 'skills', 'impeccable', 'SKILL.md')) })
-    apply(ctx, { hook: { enabled: false } })
+    apply(ctx, { hook: { enabled: false, autoDownload: false } })
     const listener = pickHookListener(listeners)
 
     const decision = { kind: 'accept', value: 'off' }
@@ -554,7 +540,7 @@ test('version：引擎版本没探测到时不许谎称「与钉死一致」', a
 
 test('status：引擎 verified 不是 true 时不打印裸 null', async () => {
   const handle = createHandle()
-  handle.log.record({ result: 'ok', file: 'hero.html', tool: 'Write', findings: 1, injected: 1, chars: 1200, ms: 31, level: 'user-skill' })
+  handle.log.record({ result: 'ok', file: 'hero.html', tool: 'Write', findings: 1, injected: 1, chars: 1200, ms: 31, level: 'user-cache' })
   const skillDir = join(PKG_ROOT, 'skills', 'impeccable')
   const { ctx } = createFakeCtx({ skills: createSkills(join(skillDir, 'SKILL.md')) })
   const result = await renderStatus({
@@ -565,8 +551,8 @@ test('status：引擎 verified 不是 true 时不打印裸 null', async () => {
     // 模拟本机引擎「引擎版本读不到、摘要未收录」的真实状态（包内快照尚未落地时就是这样）。
     engineResolver: async () => ({
       available: true,
-      level: 'user-skill',
-      label: '①用户级已装 skill 的引擎',
+      level: 'user-cache',
+      label: '①共用缓存 ~/.impeccable',
       path: 'C:\fake\impeccable.exe',
       engineVersion: null,
       verified: null,
@@ -578,4 +564,357 @@ test('status：引擎 verified 不是 true 时不打印裸 null', async () => {
   assert.equal(result.kind, 'success')
   assert.match(result.text, /版本 未知（钉死/)
   assert.ok(!/(；|：)null/.test(result.text), '不许把 null 直接拼进文案')
+})
+
+// ───────────────── 首次启动自动备齐引擎（v0.3 Task2：autoDownload） ─────────────────
+//
+// 约定（评审 B2）：热路径 fetch=0 由上面的整链用例保证（那里显式关掉自动下载）；
+// 启动 ensure 的 fetch=1 由这里保证。两条断言各自独立，互不污染。
+
+/** 包内 skill 的 SKILL.md 绝对路径（provider 夹具用）。 */
+function pkgSkillFile() {
+  return join(PKG_ROOT, 'skills', 'impeccable', 'SKILL.md')
+}
+
+/** 本机引擎缓存路径（读包内 VERSION + IMPECCABLE_HOME，沙箱里指向临时目录）。 */
+function cacheBinaryPath() {
+  const bin = enginePaths({}).userCacheBin
+  assert.ok(typeof bin === 'string' && bin.length > 0, '应当能算出缓存位（包内 VERSION 必须存在）')
+  return bin
+}
+
+/** 从 sharedLog 里取本次用例期间产生的 warning 条目。 */
+function warningsSince(since) {
+  return getSharedLog()
+    .entries(200)
+    .filter((entry) => entry.result === 'warning' && Date.parse(entry.at) >= since)
+}
+
+test('autoDownload 默认开：apply() 之后自动 ensure 一次，失败只留 warning 不抛错', async () => {
+  resetEnsureState()
+  const sandbox = await sandboxNoEngine()
+  try {
+    const { ctx } = createFakeCtx({ skills: createSkills(pkgSkillFile()) })
+    const since = Date.now()
+    const disposers = apply(ctx, { hook: { enabled: true } })
+    assert.equal(disposers.length, 1, 'apply() 照常返回 disposer，不被后台下载拖住')
+
+    // 等后台 ensure 落定：ensureEngine 是模块级单次，这里拿到的是 apply() 触发的那一份 promise。
+    const outcome = await ensureEngine({})
+    assert.equal(sandbox.counter.fetches, 1, '启动自动 ensure 必须恰好尝试下载一次')
+    assert.equal(outcome.available, false, '离线环境下失败只返回结果，绝不抛错')
+
+    const warnings = warningsSince(since)
+    assert.equal(warnings.length, 1, '下载失败必须留一行 warning（不许静默）')
+    assert.match(warnings[0].reason, /下载失败|两级引擎链全部失败/)
+  } finally {
+    sandbox.restore()
+    resetEnsureState()
+  }
+})
+
+test('autoDownload=false：apply() 之后一次都不下载（用户显式关掉）', async () => {
+  resetEnsureState()
+  const sandbox = await sandboxNoEngine()
+  try {
+    const { ctx } = createFakeCtx({ skills: createSkills(pkgSkillFile()) })
+    apply(ctx, { hook: { enabled: true, autoDownload: false } })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(sandbox.counter.fetches, 0, '关掉自动下载后启动期间不许有任何网络请求')
+
+    // 反证：单次状态没被预热 —— 现在手动 ensure 一次才会真的去下载。
+    await ensureEngine({})
+    assert.equal(sandbox.counter.fetches, 1, 'autoDownload=false 时 apply() 根本没调过 ensureEngine')
+  } finally {
+    sandbox.restore()
+    resetEnsureState()
+  }
+})
+
+test('ensureEngine 并发调用只下一次（模块级单次，不给上游添并发流量）', async () => {
+  resetEnsureState()
+  const sandbox = await sandboxNoEngine()
+  try {
+    const [first, second, third] = await Promise.all([ensureEngine({}), ensureEngine({}), ensureEngine({})])
+    assert.equal(sandbox.counter.fetches, 1, '并发三次只能发一次请求')
+    assert.equal(second, first)
+    assert.equal(third, first)
+    assert.equal(first.available, false)
+  } finally {
+    sandbox.restore()
+    resetEnsureState()
+  }
+})
+
+test('下载失败不抛错，且清掉上次崩溃遗留的 .part 文件', async () => {
+  resetEnsureState()
+  const sandbox = await sandboxNoEngine()
+  try {
+    const bin = cacheBinaryPath()
+    const binDir = dirname(bin)
+    const staleParts = [bin + '.part.4242.relic1', bin + '.part.4242.relic2']
+    await mkdir(binDir, { recursive: true })
+    for (const stale of staleParts) await writeFile(stale, '上次写完前崩了')
+
+    const { ctx } = createFakeCtx({ skills: createSkills(pkgSkillFile()) })
+    apply(ctx, { hook: { enabled: true } })
+    const outcome = await ensureEngine({})
+
+    assert.equal(outcome.available, false)
+    for (const stale of staleParts) {
+      assert.equal(existsSync(stale), false, '遗留的 .part 必须被清掉')
+    }
+    const left = readdirSync(binDir).filter((name) => name.includes('.part.'))
+    assert.deepEqual(left, [], '缓存目录里不许残留任何 .part 文件')
+  } finally {
+    sandbox.restore()
+    resetEnsureState()
+  }
+})
+
+test('autoDownload 开时：启动 ensure 一次，热路径本身不再新增请求（评审 B2）', async () => {
+  resetEnsureState()
+  const sandbox = await sandboxNoEngine()
+  try {
+    const { ctx, listeners } = createFakeCtx({ skills: createSkills(pkgSkillFile()) })
+    apply(ctx, { hook: { enabled: true } })
+    await ensureEngine({})
+    assert.equal(sandbox.counter.fetches, 1, '启动 ensure 恰好一次')
+
+    const listener = pickHookListener(listeners)
+    const decision = { kind: 'accept', value: 'hot-path' }
+    const before = getSharedLog().stats()
+    const out = await listener(
+      {
+        callId: 'call-auto-download',
+        name: 'Write',
+        arguments: { file_path: sandbox.htmlPath },
+        signal: new AbortController().signal,
+        agent: { id: 'sess-auto-download' }
+      },
+      {},
+      async () => decision
+    )
+
+    assert.equal(out, decision, '没有引擎时下游判定原样透传')
+    assert.equal(sandbox.counter.fetches, 1, '热路径不许再新增网络请求（D12）')
+    const after = getSharedLog().stats()
+    assert.equal(after.noEngine - before.noEngine, 1, '热路径走 locateEngine() 只定位')
+  } finally {
+    sandbox.restore()
+    resetEnsureState()
+  }
+})
+
+// ───────────── v0.3 Task3（评审 B3）：可选 Service 必须走 ctx.get，不许直取属性 ─────────────
+//
+// 真机缺陷（用户桌面会话实测）：`/impeccable-hook on` 报
+//   `执行失败: cannot get property "configEditor" without inject`
+// 根因：Cordis 对**未 inject 的属性读取是抛错**，不是返回 undefined；getService 原先先读 `ctx[key]`，
+// 于是在 `configEditor` 未注入（它必须保持可选，不能进 inject）时第一步就崩。
+// 下面用 Proxy 复刻「未注入即抛」的真实语义 —— 原来的 createFakeCtx 是平对象，永远绿，等于没有回归保护。
+
+/**
+ * 造一个「未 inject 的属性访问即抛错」的上下文，复刻 Cordis 的属性访问语义。
+ * 只放行 apply() 真正会碰的少数成员（on / logger / fiber）与 `get()`。
+ * @param {{services?: Record<string, unknown>, fiber?: unknown}} [options] `ctx.get()` 能拿到的 Service 表。
+ * @returns {{ctx: object, listeners: object[], warnings: string[]}} 夹具。
+ */
+function createStrictCtx(options = {}) {
+  const listeners = []
+  const warnings = []
+  const services = options.services ?? {}
+  const base = {
+    on(event, listener) {
+      listeners.push({ event, listener })
+      return () => {}
+    },
+    logger: { warn: (message) => warnings.push(String(message)) },
+    fiber: options.fiber,
+    get(key) {
+      return services[key]
+    }
+  }
+  const ctx = new Proxy(base, {
+    get(target, key, receiver) {
+      if (typeof key === 'symbol' || Reflect.has(target, key)) return Reflect.get(target, key, receiver)
+      throw new Error(`cannot get property "${String(key)}" without inject`)
+    }
+  })
+  return { ctx, listeners, warnings }
+}
+
+test('B3：未 inject configEditor 时 on/off 仍能写回 config（走 ctx.get，绝不直取属性）', async () => {
+  const entry = { name: 'dsh-impeccable-hook' }
+  const edits = []
+  const configEditor = {
+    entries: () => [entry],
+    configuration: () => [],
+    edit: async (target, change) => {
+      assert.equal(target, entry)
+      edits.push(change({ hook: { enabled: true, topN: 8 } }, {}))
+    }
+  }
+  // 注意：configEditor **只**通过 ctx.get() 暴露，属性访问会抛 —— 与真机一致。
+  const { ctx } = createStrictCtx({ services: { configEditor } })
+  const handle = createHandle({ enabled: true })
+
+  const result = await setEnabled({ ctx, handle, enabled: false })
+  assert.equal(result.kind, 'success', `不许复现真机的 inject 崩溃：${result.text}`)
+  assert.equal(handle.switch.enabled, false, '开关必须立刻生效')
+  assert.deepEqual(edits[0], { hook: { enabled: false, topN: 8 } }, '写回插件 config 且保留其它字段')
+})
+
+test('D3：on → status 开 → off → status 关（严格上下文里的四步成对断言）', async () => {
+  const entry = { name: 'dsh-impeccable-hook' }
+  const edits = []
+  const configEditor = {
+    entries: () => [entry],
+    configuration: () => [],
+    edit: async (_target, change) => {
+      edits.push(change({}, {}))
+    }
+  }
+  const skillDir = join(PKG_ROOT, 'skills', 'impeccable')
+  const { ctx } = createStrictCtx({
+    services: { configEditor, skills: createSkills(join(skillDir, 'SKILL.md')) }
+  })
+  const handle = createHandle({ enabled: false })
+  const engineResolver = async () => ({
+    available: true,
+    level: 'user-cache',
+    label: '①共用缓存 ~/.impeccable',
+    path: 'C:\\fake\\impeccable.exe',
+    engineVersion: '0.1.18',
+    verified: true,
+    verifyReason: 'sha256 与清单一致',
+    attempts: []
+  })
+  const status = async () =>
+    renderStatus({ ctx, handle, pkgRoot: PKG_ROOT, skillDir, engineResolver })
+
+  assert.match((await status()).text, /hook 开关 {4}关（/, '初始是关')
+  const on = await setEnabled({ ctx, handle, enabled: true })
+  assert.equal(on.kind, 'success')
+  assert.match((await status()).text, /hook 开关 {4}开（/, 'on 之后 status 必须是开')
+  assert.equal(edits[0].hook.enabled, true)
+  const off = await setEnabled({ ctx, handle, enabled: false })
+  assert.equal(off.kind, 'success')
+  assert.match((await status()).text, /hook 开关 {4}关（/, 'off 之后 status 必须是关')
+  assert.equal(edits[1].hook.enabled, false)
+})
+
+// ───────── v0.3 Task3 附带的 D 项：verified≠true 的渲染分支必须被**可产出的状态**覆盖 ─────────
+//
+// 裁定（captain m01398）：t16 之后引擎侧不会再产生 verified:false（摘要不符直接跳级），
+// 所以「注入 verified:false 的假对象」那种用例只是在测一个到不了的状态。这里换两条**真实状态**用例，
+// 其中 verified=null 走真实 resolveEngine（清单未收录 / 上游没发这个平台的资产），
+// 版本并排不一致走真实 buildVersionReport（lock 落后于包内 VERSION 的漂移）。
+
+test('D：verified=null（清单未收录）由真实 resolveEngine 产出，status 必须把原因摆出来', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'impeccable-hook-verify-null-'))
+  const skillDir = join(root, 'skills', 'impeccable')
+  const scriptsDir = join(skillDir, 'scripts')
+  await mkdir(scriptsDir, { recursive: true })
+  await writeFile(join(scriptsDir, 'VERSION'), '0.1.18\n', 'utf8')
+  // 清单里故意只有旧版本条目：模拟「上游清单还没收录这个平台/版本」的真实状态。
+  await writeFile(
+    join(scriptsDir, 'engine-checksums.txt'),
+    `0.1.17 impeccable-windows-x64.exe ${'a'.repeat(64)}\n`,
+    'utf8'
+  )
+  const home = join(root, 'home')
+  const paths = enginePaths({ pkgRoot: root, skillDir, impeccableHome: home })
+  await mkdir(dirname(paths.userCacheBin), { recursive: true })
+  await writeFile(paths.userCacheBin, 'fake-engine-binary', 'utf8')
+
+  const real = await resolveEngine({ pkgRoot: root, skillDir, impeccableHome: home })
+  assert.equal(real.available, true, '没有可对照的摘要只降级校验强度，不影响可用性')
+  assert.equal(real.verified, null)
+  assert.match(String(real.verifyReason), /未收录/)
+
+  const { ctx } = createStrictCtx({ services: { skills: createSkills(join(skillDir, 'SKILL.md')) } })
+  const result = await renderStatus({
+    ctx,
+    handle: createHandle(),
+    pkgRoot: root,
+    skillDir,
+    engineResolver: async (options) =>
+      resolveEngine({ ...options, pkgRoot: root, skillDir, impeccableHome: home })
+  })
+  assert.equal(result.kind, 'success')
+  assert.match(result.text, /摘要校验 .*未收录/, 'verified≠true 时必须打印摘要校验原因')
+  assert.ok(!/(；|：)null/.test(result.text), '不许把 null 直接拼进文案')
+})
+
+test('D：lock 落后于包内 VERSION 时，两个版本号并排显示「≠ 钉死」', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'impeccable-hook-lock-drift-'))
+  const skillDir = join(root, 'skills', 'impeccable')
+  await mkdir(join(skillDir, 'scripts'), { recursive: true })
+  await writeFile(join(skillDir, 'scripts', 'VERSION'), '0.1.18\n', 'utf8')
+  await writeFile(
+    join(root, 'upstream.lock.json'),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        repo: 'pbakaus/impeccable',
+        repoUrl: 'https://github.com/pbakaus/impeccable',
+        ref: 'main',
+        skillVersion: '0.1.18',
+        engineVersion: '0.1.17'
+      },
+      null,
+      2
+    )}\n`,
+    'utf8'
+  )
+  const { ctx } = createStrictCtx({ services: { skills: createSkills(join(skillDir, 'SKILL.md')) } })
+  const result = await renderStatus({
+    ctx,
+    handle: createHandle(),
+    pkgRoot: root,
+    skillDir,
+    engineResolver: async () => ({
+      available: true,
+      level: 'user-cache',
+      label: '①共用缓存 ~/.impeccable',
+      path: 'C:\\fake\\impeccable.exe',
+      engineVersion: '0.1.18',
+      verified: true,
+      verifyReason: 'sha256 与清单一致',
+      attempts: []
+    })
+  })
+  assert.equal(result.kind, 'success')
+  assert.match(result.text, /0\.1\.18 ≠ 钉死 0\.1\.17/, '漂移必须并排摆出来')
+})
+
+
+// ─────────────── v0.3 评审 N-1：samePath 必须归一化路径分隔符（真 bug） ───────────────
+//
+// 缺陷：只做小写化、不比分隔符。若 provider 报回来的是正斜杠路径（C:/x/y/SKILL.md），
+// 而包内路径由 path.join 拼成反斜杠，status 会打出**假的**「不一致 ✗」，并附上误导解释
+// 「同层有更高优先级 skill」。同一份文件、只是写法不同，必须判为一致。
+
+test('N-1：同一路径的两种分隔符写法必须判为「一致」（不能因分隔符写法不同误报不一致）', async () => {
+  const SEP = String.fromCharCode(92) // Windows 分隔符；用字符码写出来，避免源码里出现转义序列
+  const skillDir = join(PKG_ROOT, 'skills', 'impeccable')
+  const packaged = join(skillDir, 'SKILL.md')
+  const variants = [packaged, packaged.replaceAll(SEP, '/'), packaged.replaceAll('/', SEP)]
+
+  for (const actual of variants) {
+    const { ctx } = createStrictCtx({ services: { skills: createSkills(actual) } })
+    const result = await renderStatus({
+      ctx,
+      handle: createHandle(),
+      pkgRoot: PKG_ROOT,
+      skillDir,
+      engineResolver: async () => ({ available: false, reason: '测试夹具：只验路径比对' })
+    })
+    assert.match(result.text, /与包内路径 一致 ✓/, `分隔符写法不同不代表不是同一份文件：${actual}`)
+    assert.ok(
+      !result.text.includes('不一致'),
+      `不许因分隔符差异误报不一致（否则还会带出「同层有更高优先级 skill」的误导解释）：${actual}`
+    )
+  }
 })

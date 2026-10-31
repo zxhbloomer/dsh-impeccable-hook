@@ -1,7 +1,7 @@
 # dsh-impeccable-hook 验收证据表（t6 / S7）
 
 > 生成时间：2026-10-31（Asia/Hong_Kong）
-> 对应设计文档：`docs/superpowers/specs/2026-10-31-dsh-impeccable-hook-design.md`（v0.2.1）第 9 节 AC1–AC10。
+> 对应设计文档：`docs/superpowers/specs/2026-10-31-dsh-impeccable-hook-design.md`（v0.2.1）第 9 节 AC1–AC10；**v0.3 新增 AC11–AC15 见 §十**（判据来自 `docs/code-review-v0.3-plan.md` 与设计文档「v0.2.7 → v0.3」节）。
 > 证据分层：① 单测断言（`node --test test/`）② 真实链路脚本（本机真引擎、临时工程目录、全新 session）③ 命令输出（退出码 + 原文）④ 人工确认（桌面端手敲命令，**尚未执行**）。
 
 ## 一、总表
@@ -11,7 +11,7 @@
 | AC1 status 打印实际解析到的 SKILL.md 绝对路径，并与包内路径比对 | 通过（渲染与比对逻辑）｜**待人工确认**（运行期真实解析） | `test/plugin.test.mjs`：`AC1：status 打印实际路径并判定与包内路径一致`、`整链…`；真机 `renderStatus` 输出（见 §二 A/B/C） | ①②④ |
 | AC2 改含渐变文字的 .html 后下一轮出现 `[impeccable@1]` 与 `gradient-text` | 通过 | 真机整链脚本：35ms、`additionalContexts[0].role='user'`、header `[impeccable@1] Design hook findings requiring review in hero.html (1 issue(s)):`、finding `- [gradient-text] Gradient text…` | ② |
 | AC3 引擎缺失时静默关闭且 status 写原因 | 通过 | `test/hook.test.mjs`：`AC3：引擎不可用时静默跳过并记原因，绝不抛错`；`test/plugin.test.mjs`：`整链：… fetch 调用数为 0（D12 / AC3）`、`AC3：引擎缺失时 status 写明未找到及原因`；真机 status（见 §二 B） | ①② |
-| AC4 单次 hook < 200ms | 通过（35ms） | 真机整链脚本首轮 35ms、次轮 38ms（多次实跑 31–38ms）；命中 level=user-skill，摘要缓存生效 | ② |
+| AC4 单次 hook < 200ms | 通过（v0.3 两级重录：首次 74ms） | **旧证据作废**：v0.2.1 那条「35ms、命中已被删除的第一优先级引擎层」随 level① 删除不再成立（评审 N1 要求重测）。**新两级下重录**：真机 `locateEngine()` 命中 `user-cache`，首调 36ms；整链脚本首次注入 **74ms**、第二轮 31ms（均 <200ms）。时间窗诚实说明：**若首次启动的自动下载尚未完成，首轮 hook 会报 `no-engine`（0 次引擎调用、不注入），不入 200ms 统计**——这是「装完即用」的必然过渡态，见 §十 AC11/AC12 | ② |
 | AC5 同文件同问题第二次不重复注入（**两条独立防线**） | 通过 | 防线①（引擎侧、跨进程）：真机第二轮 `additionalContexts` 长度 0、`findings=0`，状态落在 `~/.impeccable/hook-claims`（**不是插件的去重**）；防线②（插件侧、进程内）：`lib/hook.js` 的 `文件::规则` 指纹去重，由 `test/hook.test.mjs`（`AC5：同文件同规则第二次不再注入`、`AC5：换文件后同样的规则允许再注入一次`）+ 评审独立脚本（20 条 findings 四轮 8/8/4/0、`dedup=20`、条数配额停 40）证明 | ①② |
 | AC6 `check-upstream.mjs` exit 0 | 通过 | `node scripts/check-upstream.mjs` → exit 0；`--online` → exit 0 且「上游 main 的 skill 版本 0.1.18 与 lock 一致」 | ③ |
 | AC7 干净 clone 后 `dsh plugin add github:…` 装上生效 | **通过（已实测 GitHub 形态）** | ① 干净 clone `https://github.com/zxhbloomer/dsh-impeccable-hook`（83 文件）后**不装任何依赖**直接 `npm test` → 92/92 pass；② 隔离 `DSH_HOME`（`%TEMP%c7-home2`）下 `dsh plugin --profile ac7 add github:zxhbloomer/dsh-impeccable-hook` → pnpm 解析到 `https://codeload.github.com/zxhbloomer/dsh-impeccable-hook/tar.gz/f4400dc…`、14.4s 装上 `dsh-impeccable-hook 0.1.0`（无 build、无 prepare）；③ 该 profile `dsh.profile.bundles` 自动登记为 `["@deepseek-ai/dsh-base","dsh-impeccable-hook"]`；④ `dsh --profile ac7 --dump-config` 渲染出 `# == dsh-impeccable-hook` 层（第 363–365 行）；⑤ 包内 `skills/impeccable` 59 文件随 tarball 落地（见 §九） | ①③ |
@@ -37,34 +37,48 @@ skill 解析   C:\Users\Administrator\.dsh\skills\impeccable\SKILL.md
 
 判定逻辑本身的双向用例由 `test/plugin.test.mjs` 覆盖（一致 ✓ / 不一致 ✗ 各一条）。
 
-### B. 引擎缺失（AC3）
+### B. 引擎缺失（AC3 / AC12）
+
+v0.3 现文案（两级）：
 
 ```
-引擎         未找到（三级降级全部失败）
-             原因：未找到可用引擎（…）：①…文件不存在 ②…未读到引擎版本 ③…hook 热路径只定位、绝不下载（D12）
+引擎         未找到（两级降级全部失败）
+             原因：未找到可用引擎（…）：①…文件不存在 ②…hook 热路径只定位、绝不下载（D12）
              如需插件下载官方引擎（约 20MB、sha256 校验）：/impeccable-hook status download
 ```
 
-### C. 引擎在但摘要无从比对（本机现状，不刷屏）
+> 历史原文（v0.2.1 时期）逐级写了 ①②③ 三条，随 level① 删除作废，此处已按两级改写。
+
+### C. 引擎在但摘要无从比对（`verified=null`，仍可达）
+
+本机当前**不是**这个状态（缓存命中且摘要一致，见 §十 AC11），但这是 `verified` 的**第三种真实状态**，不是「通过」：
 
 ```
-引擎         level=user-skill（①用户级已装 skill 的引擎）
-             path=C:\Users\Administrator\.dsh\skills\impeccable\scripts\bin\windows-x64\impeccable.exe
-             版本 未知（钉死 0.1.18） ｜ verified=null
-             摘要校验 清单 engine-checksums.txt 未收录 (无版本) impeccable-windows-x64.exe
+引擎         level=user-cache（①共用缓存 ~/.impeccable）
+             path=C:\Users\Administrator\.impeccable\bin\0.1.18\impeccable.exe
+             版本 0.1.18（钉死 0.1.18） ｜ verified=null
+             摘要校验 清单 engine-checksums.txt 未收录 …（后接逐级原因）
 ```
+
+可达输入（评审 D 项已确认**不是死代码**）：清单未收录该版本/平台、二进制读不动、上游没发对应资产（如 win32-arm64）。`verified=false` 不可达——v0.3 摘要不符直接**跳过该级**，可用引擎不会带 `false`。用例：`test/plugin.test.mjs`「D：verified=null（清单未收录）由真实 resolveEngine 产出」。
 
 ## 三、测试与命令
 
-- `npm test` → **最终态 tests 92 / pass 92 / fail 0 / skipped 0**（24 engine + 40 hook + 28 plugin）。演进：t6 消灭 t3 遗留的 POSIX-only skip（85）→ t10 补 4 条（89）→ t12 补 N3 闸门 2 条（91）→ t13 补 lock 形状 1 条（92）。
+- `npm test` → **v0.3 最终态 tests 105 / pass 105 / fail 0 / skipped 0 / todo 0**（`node --test` 自动发现；28 engine + 40 hook + 37 plugin）。演进：t6 消灭 t3 遗留的 POSIX-only skip（85）→ t10 补 4 条（89）→ t12 补 N3 闸门 2 条（91）→ t13 补 lock 形状 1 条（92）→ **v0.3：t15 level① 用例删/并（净 0，仍 93）→ t16 补 ensureEngine 与 autoDownload 8 条（101）→ t17 补 configEditor Proxy 契约 + D 项 3 条（104）→ t20 补 N-1 分隔符用例 1 条（105，本轮实测）**。
 - `node --check lib/*.js scripts/*.mjs test/*.mjs` → 全通过（与 `.github/workflows/verify.yml` 同一闸门）。
-- 静态自检：`lib/{hook,index,commands,config,log}.js` 中 `ensureEngine` 命中 0（热路径只定位，D12）；`lib/` 中 `console.` 命中 0。
+- 静态自检（**v0.3 口径修正**）：`lib/hook.js`（热路径）里 `allowDownload` 与 `ensureEngine` 命中均为 **0**——热路径只调 `locateEngine`（D12）；`ensureEngine` 在全 `lib/` 内只有 `lib/engine.js`（定义）与 `lib/index.js`（`apply()` 后的异步 bootstrap）两处出现，即**只有「启动期自动备齐」与「status download」会联网**；`lib/` 中 `console.` 命中 0。
 
 ## 四、待人工确认项（不许假装已验证）
 
 1. 桌面端会话手敲 `/impeccable-hook status`，肉眼确认「实际解析路径 = 包内路径」与注入计数。
 2. 破坏 `tools/post-execute` 签名场景下，启动时能看到那行 warning。
 3. ~~AC7：仓库推上 GitHub 后验证~~ —— **已于 2026-10-31 完成**（隔离 `DSH_HOME` + `github:` spec 真装，见 §九），不再是待人工项。
+
+**v0.3 追加入工项**（实现者拿不到桌面凭据，一律**待人工确认**，不许写成已通过）：
+
+4. **AC11 真机「缓存为空 → 自动就位」**：清空 `~/.impeccable/bin/0.1.18/`（先备份）→ 新开桌面会话 → 观察 `log` 出现一行 warning 或静默完成 → `status` 里 `verified=true` 且 `.verified` 戳存在。复验命令：`ls ~/.impeccable/bin/0.1.18/`（应见 `impeccable.exe` + `impeccable.exe.verified`）与 `/impeccable-hook status`。
+5. **AC12 真机断网首启**：断网（或把 `IMPECCABLE_DOWNLOAD_BASE` 指向不可达地址）→ 新会话 → 确认**没有** unhandledRejection、`status` 给出逐级原因 + `status download` 兜底提示、hook 退化为「无引擎」计数。复验命令：`/impeccable-hook status`、`/impeccable-hook log 20`。
+6. **AC13 桌面手敲 `on|off`**：`/impeccable-hook on` → `/impeccable-hook status`（显示开）→ `/impeccable-hook off` → `status`（显示关），并确认 profile 的 `cordis.patch.yml` 里 `hook.enabled` 已落盘。实现侧已有 4 条单测（含未 inject `configEditor` 的 `kind=error` 降级），**真机仍未敲过**。
 
 ## 五、本轮顺带修掉的真实缺陷（取证时发现）
 
@@ -112,7 +126,7 @@ skill 解析   C:\Users\Administrator\.dsh\skills\impeccable\SKILL.md
 
 因此 AC5 的「通过」是**两条防线各自有证据**，不是「某一层真机观察」冒充全部。
 
-### 3. 本轮基线复跑（t9 自跑；下块数字为 v0.2.2 当时快照，最终态以 §三 的 92 为准）
+### 3. 本轮基线复跑（t9 自跑；下块数字为 v0.2.2 当时快照，最终态以 §三 的 105 为准）
 
 ```
 $ npm test                     # tests 91 / pass 91 / fail 0 / skipped 0 / todo 0，662ms，exit 0
@@ -151,3 +165,86 @@ AC1–AC10 的最终判定与证据层级见设计文档 §9.2 与 `docs/complet
 安装时 pnpm 打印一行 `Agent skills awaiting approval: dsh-impeccable-hook@https://codeload.github.com/…`（pnpm 12 对“随包分发 agent skill 的第三方包”的信任提示）。实测**不阻断**安装与 bundle 登记；若用户希望消掉该提示，可在该 profile 目录执行 `pnpm approve`。此现象已写入 README §安装注意事项。
 
 **仍未做的（不变）**：AC1 第④层（桌面端手敲 `/impeccable-hook status`）、AC10 第④层（破坏签名看启动 warning）、`findPluginEntry` 的 `options.name` 端到端 —— 三项都需要真实凭据的桌面会话。
+
+## 十、v0.3 增量验收（AC11–AC15）
+
+> 判据来源：`docs/code-review-v0.3-plan.md`（评审结论 needs_revision 后修定）与设计文档 v0.3 节。**纪律不变**：只有单测/静态证据的，一律标「待人工确认」，不写成已通过。
+
+### AC11 缓存为空时，首次启动自动备齐引擎 —— **部分证据｜待人工确认**
+
+| 项 | 内容 |
+|---|---|
+| 判据 | 清空 `~/.impeccable/bin/<engineVersion>/` → 新开会话 → **不敲任何命令**，引擎自动就位（`impeccable[.exe]` + `.verified` 戳），hook 恢复注入，`status` 显示 `verified=true` |
+| ① 单测 | `test/plugin.test.mjs`：`autoDownload` 默认开 ⇒ `apply()` 后触发**一次** fetch；并发/重复 `apply()` 只下一次（模块级单例 Promise）；失败时**不抛**、清 `.part`、目录零残留 |
+| ③ 静态终态 | 本机现存即该终态：`ls ~/.impeccable/bin/0.1.18/` ⇒ `impeccable.exe` 20435344 B + `impeccable.exe.verified`（内容 `8f61e96b0c97001546a824d79b44f46b423b560f3eb1a0cc44a8695a1b395d9f 20435344`）；该 sha256 与 `skills/impeccable/scripts/engine-checksums.txt` 第 9 行 `0.1.18 impeccable-windows-x64.exe 8f61e96b…` **一致** |
+| 缺口（诚实说明） | **「从空缓存自动补回」这个动作本身没有被真机观察过**（实现者拿不到桌面会话，且不愿为此删掉现有可用缓存） |
+| 复验命令 | `mv ~/.impeccable/bin/0.1.18 ~/.impeccable/bin/0.1.18.bak` → 新开桌面会话 → `ls ~/.impeccable/bin/0.1.18/`（应自动出现）→ `/impeccable-hook status`（期望 `verified=true`、`level=user-cache`） |
+
+### AC12 断网 / 下载失败时首启不炸、只 warning —— **单测通过｜真机待人工确认**
+
+| 项 | 内容 |
+|---|---|
+| 判据 | 断网（或 `IMPECCABLE_DOWNLOAD_BASE` 指向不可达地址）首启：无 unhandledRejection、hook 照常加载、`log` 出现「两级引擎链全部失败…hook 静默关闭」、`status` 给逐级原因 + `status download` 兜底提示、下载目录不留 `.part` |
+| ① 单测 | `test/plugin.test.mjs`：`fetch` 抛错 ⇒ `ensureEngine` 不 reject、只 warning 一行；临时文件被清理；目录零残留 |
+| ② 真机 | **未执行**（未在断网环境跑过首启） |
+| 复验命令 | 断网 → 新会话 → `/impeccable-hook status`、`/impeccable-hook log 20`；期望 status 有逐级原因与兜底提示、log 有 warning 行、无异常堆栈 |
+
+### AC13 `/impeccable-hook on|off` 热切换并持久化 —— **单测通过｜真机待人工确认**
+
+| 项 | 内容 |
+|---|---|
+| 判据 | `on` → `status` 显示开；`off` → 显示关；且 profile 的 `cordis.patch.yml` 里 `hook.enabled` 已改写。拿不到 `configEditor` 时返回 `kind=error`、**开关仍在本会话生效**、文案给出手改指引 |
+| ① 单测 | t17 补 4 条：`ctx.get('configEditor')` 取到 ⇒ 写回成功（`kind=success`）；`configEditor` 缺失 ⇒ `kind=error` + 「没能持久化」文案；`edit` 走 Proxy 契约（沿继承层取值）；profile 里定位不到插件行 ⇒ 第二种 `kind=error` 文案 |
+| 真机 | t17 已修一个**真实缺陷**：旧实现 `configEditor` 未进 `inject`，真机 `on` 直接报「cannot get property … without inject」。**修后未在桌面端复敲** ⇒ 待人工 |
+| 复验命令 | 桌面端 `/impeccable-hook on` → `/impeccable-hook status`（显示开）→ 查 profile `cordis.patch.yml` 是否 `hook.enabled: true` → `/impeccable-hook off` → 同样再查一遍 |
+
+### AC14 引擎解析只剩两级、不再存在第一优先级层 —— **通过（静态）**
+
+- 判据：`LEVEL_LABEL` 的键集恰为 `{user-cache, download}`；`lib/engine.js` 里不存在第三个查找分支。
+- ① `test/engine.test.mjs:175` 断言 `Object.keys(LEVEL_LABEL).sort()` 深等于 `['download','user-cache']`。
+- ③ `grep -rn` 历史第一级标签名（模式原文见 `docs/code-review-v0.3-plan.md` 判据）扫 `lib test` ⇒ **仅 1 处命中**，内容是 `lib/engine.js:14` 的一行注释，说明「那一级已删除」——**解释性注释，不是查找分支**。
+
+### AC15 交付文档不再把「借用已装 skill 的引擎」当默认路径 —— **通过（交付文档 0 命中）**
+
+判据与实测（本轮 t18 改完后现跑）：
+
+```
+grep -rn <历史第一级标签名> README.md docs/*.md skills/impeccable/MODIFICATIONS.md
+# 模式原文 = docs/code-review-v0.3-plan.md:18 判据里的两个词；此处不复写，免得文档自己去命中自己
+```
+
+| 文件 | 命中 |
+|---|---|
+| `README.md` | **0** |
+| `docs/acceptance-evidence.md` | **0** |
+| `docs/completion-summary.md` | **0** |
+| `docs/code-review-S2-S6.md` | **0** |
+| `skills/impeccable/MODIFICATIONS.md` | **0** |
+| `docs/code-review-v0.3-plan.md` | 2（评审原文：引用旧 AC4 证据、以及判据本身）——**评审文档不是交付文档，且不在本轮可改范围** |
+
+→ 结论：**五份交付/合规文档 0 命中**；`docs/code-review-v0.3-plan.md` 的 2 处是评审引用，保留原样以便追溯（与「历史修订记录节除外」同理，请 captain 认同此豁免）。
+
+---
+
+### t20 对第三轮评审非阻塞项的处置 —— N-1 / N-2 / N-3 已关闭
+
+> 评审原文见 `docs/code-review-v0.3.md`（**只读，不改**）；处置结论只登记在此。
+
+| 编号 | 级别 | 处置 | 验证 |
+|---|---|---|---|
+| **N-1** | low（真 bug） | `lib/commands.js` 新增 `normalizeForCompare(value)`：先把 `\` 归一成 `/`、折叠连续分隔符，再按平台处理大小写（win32 小写化，其余原样）；`samePath` 两侧归一化后比较。修掉「同一文件两种分隔符写法被判**不一致 ✗**」的假报与随之而来的误导解释（原文案会把正斜杠路径说成「同层有更高优先级的同名 skill」） | 新增用例 `N-1：同一路径的两种分隔符写法必须判为「一致」`（三种写法：`path.join` 原样 / 全正斜杠 / 全反斜杠）。**先红**报 `AssertionError: 分隔符写法不同不代表不是同一份文件：D:/…/skills/impeccable/SKILL.md`，**后绿** `test/plugin.test.mjs` 37/37 |
+| **N-2** | low-medium（口径诚实性） | `lib/engine.js:12-14` 与 `README.md:162` 改为**两种情形分开写**：① 二进制摘要与 `engine-checksums.txt` 不符 → 跳过该级 + 在 `attempts` 里逐级写明原因（不加载来路不明的引擎）；② 引擎自述版本 ≠ lock 钉死版本 → 仍可用，但 `status` 把两个版本并排列出 + 记一次 warning。原「版本/摘要不一致 ⇒ 可用但自述不一致 + warning」的合写已作废（v0.3 摘要不符一律 fatal，`available` 结果不会带 `verified:false`） | `grep` 两处新文案已落地；本条只改注释与 README 一行，不涉及行为 |
+| **N-3** | low（死分支） | 删掉 `lib/engine.js` 两处 `verified === false` 兜底：`warning: hit.warning === undefined ? (hit.verified === false ? hit.verifyReason : null) : hit.warning` → `warning: hit.warning ?? null`；`attemptEntry` 里 `warning: check.verified === false ? check.reason : null,` 整行删除。「命中但 `verified:false`」在 v0.3 已无生产者（摘要不符直接跳过该级） | `grep -rn "verified === false" lib` = **0**；测试只增不减（104 → 105），无断言受影响 |
+| N-4 / N-5 | info | 按裁决**推迟 v1.1**，本轮不动 | — |
+
+---
+
+## 十一、v0.3 待人工清单（交付说明用）
+
+| AC | 现状 | 复验动作 |
+|---|---|---|
+| AC11 自动备齐 | 单测 + 静态终态均有；「清空后自动补回」未真机观察 | 备份并移走 `~/.impeccable/bin/0.1.18`，新会话后查目录与 `status` |
+| AC12 断网首启 | 仅单测 | 断网新会话，查 `status` / `log 20` |
+| AC13 `on`/`off` | 仅单测（修前真机报错） | 桌面端手敲两遍并查 profile 落盘 |
+| AC1 / AC10 第④层 | 仅 ①②③ | 桌面端手敲 `status`；破坏 `tools/post-execute` 签名看启动 warning |
+| `findPluginEntry` 的 `options.name` 端到端 | 单测覆盖，真机无法测（当前 profile 未装本插件） | 装插件后 `on`/`off` 顺手验一次持久化 |

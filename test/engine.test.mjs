@@ -1,6 +1,6 @@
 // test/engine.test.mjs —— lib/engine.js 单测（node --test）
 //
-// 覆盖设计文档 §4.2 三级降级链与四条硬约束：
+// 覆盖设计文档 §4.2 两级降级链（v0.3 Task1）与四条硬约束：
 //   C9  原生绝对路径把关 · C10 版本只认 VERSION · D12 热路径不下载 · AC3 全失败不抛错
 // 全部用例只操作 os.tmpdir() 下的 fixture，不联网（fetch 一律注入假实现），
 // 也不读本机真实引擎，保证在干净 clone 上可复现。
@@ -13,14 +13,18 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  LEVEL_LABEL,
   enginePaths,
+  ensureEngine,
   expectedDigests,
   isNativeAbsolutePath,
   locateEngine,
+  normalizeOptions,
   parseChecksums,
   platformTarget,
   probeEngineVersion,
   readEngineVersion,
+  resetEnsureState,
   resolveEngine,
   toNativePath,
 } from '../lib/engine.js';
@@ -58,18 +62,8 @@ function makeFixture({ platform = process.platform, arch = process.arch, manifes
     target,
     platform,
     arch,
-    dshHome: path.join(root, 'dsh-home'),
     impeccableHome: path.join(root, 'impeccable-home'),
   };
-}
-
-/** 在「用户级已装 skill」位置放一份引擎。 */
-function placeUserSkillEngine(f, content = PAYLOAD) {
-  const dir = path.join(f.dshHome, 'skills', 'impeccable', 'scripts', 'bin', f.target.target);
-  fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, f.target.exe);
-  fs.writeFileSync(file, content);
-  return file;
 }
 
 /** 在「~/.impeccable 版本缓存」位置放一份引擎。 */
@@ -103,7 +97,6 @@ function baseOptions(f, extra = {}) {
     arch: f.arch,
     versionFile: f.versionFile,
     checksumsFile: f.checksumsFile,
-    dshHome: f.dshHome,
     impeccableHome: f.impeccableHome,
     ...extra,
   };
@@ -177,12 +170,40 @@ test('toNativePath / isNativeAbsolutePath 按目标平台把关（C9）', () => 
   assert.equal(isNativeAbsolutePath('relative/impeccable', 'linux'), false);
 });
 
-test('enginePaths 用包内 VERSION 与清单算出三级候选路径', () => {
+// ──────────────────── v0.3 Task1：两级链的三条契约测试（先写红，再实现） ────────────────────
+
+test('LEVEL_LABEL 只剩两级：①共用缓存 ~/.impeccable ②官方 Release 下载', () => {
+  assert.deepEqual(Object.keys(LEVEL_LABEL).sort(), ['download', 'user-cache']);
+  assert.match(LEVEL_LABEL['user-cache'], /共用缓存 ~\/\.impeccable/);
+  assert.match(LEVEL_LABEL.download, /官方 Release 下载/);
+});
+
+test('enginePaths 不再产出 userSkillBin（level① 已删除）', () => {
+  const f = makeFixture();
+  assert.equal('userSkillBin' in enginePaths(baseOptions(f)), false);
+});
+
+test('normalizeOptions 默认 impeccableHome = ~/.impeccable，且 IMPECCABLE_HOME 仍生效（dshHome 已删）', () => {
+  const saved = process.env.IMPECCABLE_HOME;
+  delete process.env.IMPECCABLE_HOME;
+  try {
+    const cfg = normalizeOptions({});
+    assert.equal(cfg.impeccableHome, path.join(os.homedir(), '.impeccable'));
+    assert.equal('dshHome' in cfg, false, 'dshHome 是死参数，v0.3 Task1 已删');
+    // 环境变量仍能覆盖（测试与 status 都走这条路径）
+    process.env.IMPECCABLE_HOME = path.join(os.tmpdir(), 'impeccable-home-env');
+    assert.equal(normalizeOptions({}).impeccableHome, process.env.IMPECCABLE_HOME);
+  } finally {
+    if (saved === undefined) delete process.env.IMPECCABLE_HOME;
+    else process.env.IMPECCABLE_HOME = saved;
+  }
+});
+
+test('enginePaths 用包内 VERSION 与清单算出两级候选路径', () => {
   const f = makeFixture();
   const p = enginePaths(baseOptions(f));
   assert.equal(p.engineVersion, ENG);
   assert.equal(p.asset, f.target.asset);
-  assert.equal(p.userSkillBin, path.join(f.dshHome, 'skills', 'impeccable', 'scripts', 'bin', f.target.target, f.target.exe));
   assert.equal(p.userCacheBin, path.join(f.impeccableHome, 'bin', ENG, f.target.exe));
   assert.ok(p.url.endsWith(`/engine-v${ENG}/${f.target.asset}`));
   assert.deepEqual(p.digests, [f.digest]);
@@ -190,53 +211,30 @@ test('enginePaths 用包内 VERSION 与清单算出三级候选路径', () => {
 
 // ────────────────────────────── 定位（热路径，只定位不下载） ──────────────────────────────
 
-test('一级命中：用户级已装引擎直接可用，且 sha256 与清单一致', async () => {
-  const f = makeFixture();
-  const bin = placeUserSkillEngine(f);
-  const r = await locateEngine(baseOptions(f));
-  assert.equal(r.available, true);
-  assert.equal(r.level, 'user-skill');
-  assert.equal(r.engineVersion, ENG);
-  assert.equal(r.verified, true);
-  assert.equal(r.warning, null);
-  assert.equal(r.path, toNativePath(bin, f.platform));
-  assert.equal(isNativeAbsolutePath(r.path, f.platform), true);
-  // 三级链的每一级都有可审计的结论
-  assert.equal(r.attempts.length, 1);
-  assert.equal(r.attempts[0].ok, true);
-});
-
-test('一级缺失、二级命中：回落到 ~/.impeccable 版本缓存', async () => {
+test('①缓存命中：~/.impeccable 里的引擎直接可用，且 sha256 与清单一致', async () => {
   const f = makeFixture();
   const bin = placeUserCacheEngine(f);
   const r = await locateEngine(baseOptions(f));
   assert.equal(r.available, true);
   assert.equal(r.level, 'user-cache');
+  assert.equal(r.engineVersion, ENG);
+  assert.equal(r.verified, true);
+  assert.equal(r.warning, null);
   assert.equal(r.path, toNativePath(bin, f.platform));
-  assert.equal(r.attempts.length, 2);
-  assert.equal(r.attempts[0].ok, false);
-  assert.match(r.attempts[0].reason, /不存在/);
-  assert.equal(r.attempts[1].ok, true);
+  assert.equal(isNativeAbsolutePath(r.path, f.platform), true);
+  // 两级链的每一级都有可审计的结论
+  assert.equal(r.attempts.length, 1);
+  assert.equal(r.attempts[0].ok, true);
 });
 
-test('一级摘要不符仍可用但必须留 warning（A3：不静默）', async () => {
-  const f = makeFixture();
-  placeUserSkillEngine(f, 'a-newer-user-installed-engine');
-  const r = await locateEngine(baseOptions(f));
-  assert.equal(r.available, true);
-  assert.equal(r.level, 'user-skill');
-  assert.equal(r.verified, false);
-  assert.match(r.warning, /与钉死引擎版本不一致/);
-});
-
-test('二级缓存被改动（摘要不符）时跳过该级别', async () => {
+test('①缓存被改动（摘要不符）时跳过该级别，并在 attempts 里留原因（不静默）', async () => {
   const f = makeFixture();
   placeUserCacheEngine(f, 'tampered-cache');
   const r = await locateEngine(baseOptions(f));
   assert.equal(r.available, false);
-  assert.equal(r.attempts[1].level, 'user-cache');
-  assert.equal(r.attempts[1].ok, false);
-  assert.match(r.attempts[1].reason, /疑似被改动/);
+  assert.equal(r.attempts[0].level, 'user-cache');
+  assert.equal(r.attempts[0].ok, false);
+  assert.match(r.attempts[0].reason, /疑似被改动/);
 });
 
 test('全部缺失时热路径只定位、绝不下载（D12 / AC3）', async () => {
@@ -249,10 +247,10 @@ test('全部缺失时热路径只定位、绝不下载（D12 / AC3）', async ()
   assert.equal(fetchImpl.calls.length, 0, '热路径不得发起任何下载请求');
   assert.match(r.reason, /热路径只定位、绝不下载/);
   assert.match(r.reason, /hook 静默关闭/);
-  // 三级的结论都留痕，便于 status 解释原因（AC3）
+  // 两级的结论都留痕，便于 status 解释原因（AC3）
   assert.deepEqual(
     r.attempts.map((a) => a.level),
-    ['user-skill', 'user-cache', 'download'],
+    ['user-cache', 'download'],
   );
 });
 
@@ -263,13 +261,13 @@ test('VERSION 读不到时缓存位与下载位都没有可用路径', async () 
   const r = await locateEngine(baseOptions(f, { fetchImpl }));
   assert.equal(r.available, false);
   assert.equal(r.engineVersion, null);
-  assert.match(r.attempts[1].reason, /未读到引擎版本/);
+  assert.match(r.attempts[0].reason, /未读到引擎版本/);
   assert.equal(fetchImpl.calls.length, 0);
 });
 
 test('会话已中止时立刻返回「已取消」，不做任何定位副作用', async () => {
   const f = makeFixture();
-  placeUserSkillEngine(f);
+  placeUserCacheEngine(f);
   const controller = new AbortController();
   controller.abort(new Error('用户取消'));
   const r = await locateEngine(baseOptions(f, { signal: controller.signal }));
@@ -285,7 +283,7 @@ function ensureDownload(options) {
   return resolveEngine({ ...options, allowDownload: true });
 }
 
-test('三级下载成功：临时文件 → 校验 → 原子 rename，且留下 .verified 戳', async () => {
+test('二级下载成功：临时文件 → 校验 → 原子 rename，且留下 .verified 戳', async () => {
   const f = makeFixture();
   const fetchImpl = fakeFetch(PAYLOAD);
   const r = await ensureDownload(baseOptions(f, { fetchImpl }));
@@ -340,13 +338,13 @@ test('下载空内容：拒绝写入', async () => {
   assert.match(r.attempts.at(-1).reason, /下载内容为空/);
 });
 
-test('允许下载的入口不会因为一级/二级已有引擎就联网', async () => {
+test('允许下载的入口不会因为①缓存已有引擎就联网', async () => {
   const f = makeFixture();
-  placeUserSkillEngine(f);
+  placeUserCacheEngine(f);
   const fetchImpl = fakeFetch(PAYLOAD);
   const r = await ensureDownload(baseOptions(f, { fetchImpl }));
   assert.equal(r.available, true);
-  assert.equal(r.level, 'user-skill');
+  assert.equal(r.level, 'user-cache');
   assert.equal(fetchImpl.calls.length, 0);
 });
 
@@ -381,4 +379,71 @@ test('probeEngineVersion 观察 abort 信号（C3）', async () => {
   const pending = probeWith('setTimeout(() => {}, 5000)', { signal: controller.signal, timeoutMs: 5000 });
   controller.abort();
   assert.equal(await pending, null);
+});
+
+// ───────────────────── ensureEngine：首次启动自动备齐（v0.3 Task2） ─────────────────────
+
+test('ensureEngine：模块级单次，并发调用只下载一次', async () => {
+  resetEnsureState();
+  const f = makeFixture();
+  const fetchImpl = fakeFetch(PAYLOAD);
+  const opts = baseOptions(f, { fetchImpl });
+  try {
+    const [a, b, c] = await Promise.all([ensureEngine(opts), ensureEngine(opts), ensureEngine(opts)]);
+    assert.equal(fetchImpl.calls.length, 1, '并发三次 ensureEngine 只能发一次请求（模块级单次）');
+    assert.equal(a.available, true);
+    assert.equal(a.level, 'download');
+    assert.equal(a.path, path.join(f.impeccableHome, 'bin', ENG, f.target.exe));
+    assert.ok(fs.existsSync(a.path), '下载成功后引擎必须落到 ~/.impeccable 缓存位');
+    assert.equal(b, a, '并发调用复用同一份结果对象');
+    assert.equal(c, a);
+  } finally {
+    resetEnsureState();
+  }
+});
+
+test('ensureEngine：下载失败不抛错，并清掉上次崩溃遗留的 .part 文件', async () => {
+  resetEnsureState();
+  const f = makeFixture();
+  const binDir = path.join(f.impeccableHome, 'bin', ENG);
+  fs.mkdirSync(binDir, { recursive: true });
+  const stale = path.join(binDir, `${f.target.exe}.part.999.zzz`);
+  fs.writeFileSync(stale, '上次写完前崩了留下的半截文件');
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    throw new Error('offline fixture：本仓库测试绝不联网');
+  };
+  try {
+    const outcome = await ensureEngine(baseOptions(f, { fetchImpl }));
+    assert.equal(calls, 1, '失败路径也要真的试一次下载');
+    assert.equal(outcome.available, false, '失败只返回结果，绝不抛错');
+    assert.match(outcome.reason, /两级引擎链全部失败/);
+    assert.equal(fs.existsSync(stale), false, '遗留的 .part 必须被清掉，不能越积越多');
+    assert.equal(
+      fs.readdirSync(binDir).filter((name) => name.includes('.part.')).length,
+      0,
+      '缓存目录里不许残留任何 .part 文件'
+    );
+  } finally {
+    resetEnsureState();
+  }
+});
+
+test('ensureEngine：失败后再调用不重试（单次语义，失败也算用完这次机会）', async () => {
+  resetEnsureState();
+  const f = makeFixture();
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    throw new Error('offline fixture');
+  };
+  try {
+    const first = await ensureEngine(baseOptions(f, { fetchImpl }));
+    const second = await ensureEngine(baseOptions(f, { fetchImpl }));
+    assert.equal(calls, 1, '第二次 ensureEngine 复用同一份失败结果，不重复下载');
+    assert.equal(second, first);
+  } finally {
+    resetEnsureState();
+  }
 });

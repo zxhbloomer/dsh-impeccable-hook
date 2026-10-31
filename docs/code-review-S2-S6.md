@@ -59,7 +59,9 @@ $ node scripts/check-upstream.mjs
 
 ### 3. 热路径纪律（D12/C9）—— **通过**
 
-`lib/hook.js:19-25` 的 import 只有 `node:child_process`、`node:crypto`、`node:path`、`./config.js`、`./engine.js`（**只取 `locateEngine`**）、`./log.js`。全仓 `grep -n "allowDownload" lib/hook.js lib/index.js` **零命中**；`ensureEngine` 在 `lib/` 内只出现在 `lib/engine.js`（定义 + 两处注释），无生产调用方。
+`lib/hook.js:19-25` 的 import 只有 `node:child_process`、`node:crypto`、`node:path`、`./config.js`、`./engine.js`（**只取 `locateEngine`**）、`./log.js`。**热路径**纪律按 v0.3 口径限定：`grep -n "allowDownload" lib/hook.js` **零命中**、`grep -n "ensureEngine" lib/hook.js` **零命中**（v0.2.1 原文此处写的是「`lib/` 内 `ensureEngine` 无生产调用方」——v0.3 起该函数由 `lib/index.js` 在 `apply()` 后异步调用以自动备齐引擎，因此那条**全仓**判据已被 v0.3 取代，只剩「热路径零命中」这条仍然成立）。
+
+> 口径修正（v0.3）：能联网的只有两处——启动期 `ensureEngine`（`hook.autoDownload`，默认开）与显式 `/impeccable-hook status download`；hook 每次编辑仍然只做 `locateEngine`。
 
 整链 `fetch=0` 是**真实用例**不是注入假 locate：`test/plugin.test.mjs:336+` 把 `globalThis.fetch` 换成计数即抛的实现，`DSH_HOME`/`IMPECCABLE_HOME` 指向空临时目录，然后走 `apply()` 的真实监听器 → 真实 `locateEngine`，断言 `counter.fetches === 0`、`out === decision`、`calls` 增量 0、`noEngine` 增量 1。我读过这段代码，也把它当可信证据。
 
@@ -114,7 +116,7 @@ stats: calls=4 injections=3 findings=20 dedup=20 quota=0 last.result='dedup'
 | `lib/engine.js:127` `windows-arm64 → x64` 回退 | 推测分支（上游没有 windows-arm64 资产） | 删，或注明依据 |
 | `lib/config.js` 的 `maxCharsPerSession=12000` | 默认 `maxFindingsPerSession=40` 时永远够用（我实测 40 条 ≈1.6k 字符），字符配额基本不可达 | 保留可以，但要知道默认值下它是死参数；建议注释说明 |
 
-`lib/hook.js`（531 行）我没找到多余抽象：`extractFilePath`/`buildEngineEvent`/`runEngineHook`/`parseEngineOutput`/`parseInjection`/`renderInjection`/`createInjectionMessage`/`mergeAdditionalContexts`/`createHookState`/`createPostExecuteHook`/`attachHook` 各有确定调用方，且都是单测接缝。`engine.js` 的体量主要是三级降级 + 摘要校验 + 下载纪律的实在逻辑，扣掉上表几项后不算过度设计。
+`lib/hook.js`（531 行）我没找到多余抽象：`extractFilePath`/`buildEngineEvent`/`runEngineHook`/`parseEngineOutput`/`parseInjection`/`renderInjection`/`createInjectionMessage`/`mergeAdditionalContexts`/`createHookState`/`createPostExecuteHook`/`attachHook` 各有确定调用方，且都是单测接缝。`engine.js` 的体量主要是引擎降级链 + 摘要校验 + 下载纪律的实在逻辑，扣掉上表几项后不算过度设计。（v0.3 注：降级链已收敛为**两级**——共用缓存 `~/.impeccable` + 官方 Release 下载；本行原文写的层级数为 v0.2.x 时口径。）
 
 ### 10. 合规（Apache-2.0 / C12）—— **不通过（B2）**
 

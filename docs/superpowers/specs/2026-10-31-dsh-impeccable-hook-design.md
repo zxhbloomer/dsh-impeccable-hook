@@ -376,3 +376,70 @@ t9（验收汇总回写）连续两次撞同一用户并发上限（`PI_AI_ERROR
 1. `.github/workflows/verify.yml` 随 `a20de38` 入库（此前因 `gh` token 缺 `workflow` scope 被 GitHub 拒收）。
 2. **CI 首跑失败，暴露真实兼容缺陷**：`scripts.test = "node --test test/"` 的目录实参在本机 node 26 可用，在 CI 的 node 22 报 `Cannot find module '…/test'`（ubuntu 与 windows 两平台同因）。改为 `node --test`（无参自动发现 `test/*.mjs`），本地 92/92 不变，跨版本兼容。
 3. 教训记录：**本机 node 26 通过 ≠ CI node 22 通过**；`node --test` 的路径实参属于版本相关行为，npm script 里不要带目录。
+4. CI 复跑通过：`aa6adff`，19s，ubuntu-latest 与 windows-latest 双平台均绿（run 41200064959）。
+
+
+### v0.2.7 → v0.3（需求收口：本项目自给自足，装完即用）
+
+**用户口径（本轮原话要点）**：①现有那套是通过 `pbakaus/impeccable` 装的，要清空它；②本项目安装后应**自动完成所有安装，包括 skill 和 exe**；③为了不改 skill 内容，入口仍按 `/impeccable`；④引擎就是那个 exe，从 impeccable 下载、装本项目时自动下载；⑤`on`/`off` 都有问题。
+
+**问题定性**：v0.2.x 把"复用用户级已装 skill / 引擎"设计成了第一优先级（README §引擎表 `level=user-skill` 居首、`$DSH_HOME/skills/impeccable/...` 为 level①），这与"只维护本项目、不混淆"直接冲突——插件实际寄生于上游手装目录，用户删掉目录后引擎即消失。本轮把来源收成一条。
+
+#### 变更 D-13：引擎降级由三级收为两级（删除"复用用户级已装"）
+
+- 现状：①`$DSH_HOME/skills/impeccable/scripts/bin/<os>-<arch>/impeccable[.exe]` ②`~/.impeccable/bin/<ver>/` ③官方 Release 下载。
+- 改为：①插件自己的缓存目录 `~/.dsh-impeccable-hook/bin/<engineVersion>/impeccable[.exe]` ②官方 Release 下载（`engine-v<ver>` 资产 + `engine-checksums.txt` sha256 + 临时文件→校验→原子 rename→`.verified` 戳）。
+- 删除 level① 的理由：那一份属于上游手动安装，存在即"第二来源"；且它的版本不受本插件 lock 约束。
+
+#### 变更 D-14：安装后自动就绪（首次启动异步下载）
+
+- 触发点：`apply()` 完成后异步 `ensureEngine({ allowDownload: true })`，**不 await、不阻塞启动**，失败只打一行 warning（沿用 AC3「运行期不抛错」）。
+- 同进程内只尝试一次；并发调用复用同一 Promise；下载中不重复下载。
+- **不用 `postinstall`**：DSH 用 pnpm 安装插件，pnpm 默认拦截构建脚本 —— 实测安装 desktop 时因既有插件 `dsh-purge` 的 postinstall 触发 `ERR_PNPM_IGNORED_BUILDS` 导致**整批安装失败**，必须人工批准。把 20MB 下载放那里会让"装插件"变成"可能装不上"。
+- hook 热路径仍 `allowDownload:false`（D12 不变）：热路径只定位，绝不联网。
+- 离线/受限网络：warning 提示 + `status` 里给出手动命令 `/impeccable-hook status download`。
+
+#### 变更 D-15：缓存目录改名，避免与上游重名
+
+- `~/.impeccable` → `~/.dsh-impeccable-hook`（`IMPECCABLE_HOME` 覆盖仍支持，改名后可用 `DSH_IMPECCABLE_HOME` 或保留同名变量）。
+- 理由：`~/.impeccable` 是上游 launcher 的默认目录，功能上是我们的、名义上是上游的，正是用户说的"混淆"。
+
+#### 变更 D-16：修 `/impeccable-hook on|off`
+
+- 缺陷：`lib/commands.js` 在用 `configEditor` 前未声明/未取得注入，真机报 `cannot get property "configEditor" without inject`，`on`、`off` 均不可用。
+- 修法：按 DSH 注入契约显式声明并取用（`inject` 里列出，或经 `ctx.inject` 拿作用域内的服务句柄），并让 on/off 走「先改运行时开关 → 再持久化配置」的既有顺序。
+- 回归：on→status 显示开→off→status 显示关→配置落盘，四步成对断言。
+
+#### 变更 D-17：文档口径
+
+- README 删除"用户级已装 = 第一优先级"叙述；引擎表改两级；新增「装完即用」段（首次启动自动下载 20MB，失败怎么办）。
+- `/impeccable` 入口表述改为：由包内 skill 的 `user-invocable` 提供，**不修改 skill 内容**。
+- `acceptance-evidence.md` / `completion-summary.md` 同步回写本轮实测。
+
+#### 影响文件清单
+
+| 文件 | 改什么 |
+|---|---|
+| `lib/engine.js` | 删 level①、缓存目录改名、暴露 `ensureEngine`（供启动期与 status 复用） |
+| `lib/index.js` | `apply()` 后异步 ensure + 一次性 warning |
+| `lib/commands.js` | 注入修复（D-16）、status 文案改两级、下载提示 |
+| `lib/config.js` | 缓存根目录常量改名 |
+| `test/engine.test.mjs` | 删 level① 用例、加两级用例、加缓存目录用例 |
+| `test/plugin.test.mjs` | 加启动期 ensure 用例（假引擎注入，禁真下载） |
+| `test/hook.test.mjs` | 断言热路径 `allowDownload:false` 不变 |
+| `README.md` | D-17 |
+| `docs/acceptance-evidence.md`、`docs/completion-summary.md` | 回写 |
+
+#### 新增验收
+
+| ID | 判据 |
+|---|---|
+| AC11 | 缓存目录为空时，插件加载后自动把引擎下载到位（sha256 校验 + `.verified` 戳），期间 DSH 启动不被阻塞 |
+| AC12 | 断网/下载失败：只 warning，不抛错，hook 退化为「无引擎」计数，`status` 给出手动命令 |
+| AC13 | `on` / `off` 均可执行且状态与配置一致 |
+| AC14 | 引擎解析只剩两级，输出里不再出现 `user-skill` |
+| AC15 | `README` / 文档中不再有"复用用户级已装引擎"作为默认路径的表述 |
+
+#### 迁移说明（本机一次性）
+
+本轮之前引擎已落在 `~/.impeccable/bin/0.1.18/`。改目录后该缓存不再命中，首次启动会重新下载一次 20MB（用户已同意）。旧缓存可留可删，不影响功能。

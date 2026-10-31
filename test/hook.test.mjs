@@ -63,7 +63,7 @@ function fakeEngine(outcome) {
 }
 
 /** 假定位：默认「引擎可用」。 */
-function fakeLocate(engine = { available: true, path: 'C:\\eng\\impeccable.exe', level: 'user-skill', engineVersion: '0.1.18' }) {
+function fakeLocate(engine = { available: true, path: 'C:\\eng\\impeccable.exe', level: 'user-cache', engineVersion: '0.1.18' }) {
   const calls = []
   const locate = async (options) => {
     calls.push(options)
@@ -307,7 +307,7 @@ test('运行期 off 立刻生效：switch.enabled 改为 false 后热路径立�
 
 test('AC3：引擎不可用时静默跳过并记原因，绝不抛错', async () => {
   const { listener, log } = makeHook({
-    locateResult: { available: false, reason: '三级降级全部失败：skill 照常可用，hook 静默关闭' }
+    locateResult: { available: false, reason: '两级降级全部失败：skill 照常可用，hook 静默关闭' }
   })
   const decision = { kind: 'accept', value: 4 }
   const out = await listener(makeExec(), {}, async () => decision)
@@ -315,7 +315,7 @@ test('AC3：引擎不可用时静默跳过并记原因，绝不抛错', async ()
   const stats = log.stats()
   assert.equal(stats.noEngine, 1)
   assert.equal(stats.last.result, 'no-engine')
-  assert.match(stats.last.reason, /三级降级全部失败/)
+  assert.match(stats.last.reason, /两级降级全部失败/)
   assert.equal(stats.injections, 0)
 })
 
@@ -495,7 +495,7 @@ test('D12：engineOptions 原样传给 locate（热路径不下载由 locateEngi
 test('引擎告警同会话只记一次', async () => {
   const items = ['[impeccable@1] findings:', '- [a] 甲'].join('\n')
   const { listener, log } = makeHook({
-    locateResult: { available: true, path: 'C:\\eng.exe', level: 'user-skill', warning: '引擎摘要与钉死版本不符' },
+    locateResult: { available: true, path: 'C:\\eng.exe', level: 'user-cache', warning: '引擎摘要与钉死版本不符' },
     engineOutcome: { ok: true, result: 'ok', stdout: envelope(items) }
   })
   const next = async () => ({ kind: 'accept', value: 1 })
