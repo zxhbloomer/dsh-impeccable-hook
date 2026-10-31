@@ -370,3 +370,9 @@ t9（验收汇总回写）连续两次撞同一用户并发上限（`PI_AI_ERROR
 1. 仓库推上 GitHub（public，`github.com/zxhbloomer/dsh-impeccable-hook`，首提交 `f4400dc`，默认分支 `main`），84 文件（含 `.gitignore`）。
 2. **AC7 由「待人工」升级为「通过」**：源码在干净 clone 后不装依赖即可 `npm test` 92/92；隔离 `DSH_HOME` 下 `dsh plugin --profile ac7 add github:zxhbloomer/dsh-impeccable-hook` 成功装成 0.1.0 并自动登记 bundle。取证见 `docs/acceptance-evidence.md` §九。
 3. 遗留：`.github/workflows/verify.yml` 因 `gh` token 缺 `workflow` scope 未能入库（本地保留），补推后 CI 才生效；AC1/AC10 第④层与 `findPluginEntry` 端到端仍需桌面会话人工确认。
+
+### v0.2.5 → v0.2.6（CI 入库 + 首跑失败修复）
+
+1. `.github/workflows/verify.yml` 随 `a20de38` 入库（此前因 `gh` token 缺 `workflow` scope 被 GitHub 拒收）。
+2. **CI 首跑失败，暴露真实兼容缺陷**：`scripts.test = "node --test test/"` 的目录实参在本机 node 26 可用，在 CI 的 node 22 报 `Cannot find module '…/test'`（ubuntu 与 windows 两平台同因）。改为 `node --test`（无参自动发现 `test/*.mjs`），本地 92/92 不变，跨版本兼容。
+3. 教训记录：**本机 node 26 通过 ≠ CI node 22 通过**；`node --test` 的路径实参属于版本相关行为，npm script 里不要带目录。

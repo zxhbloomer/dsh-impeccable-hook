@@ -96,7 +96,8 @@
 | skill 快照落地 + lock 填实（原 B1 阻塞） | ✅ 已完成（t10），阻塞解除 | — |
 | `git init` 与推 GitHub | ✅ 已完成（2026-10-31） | public 仓库 `github.com/zxhbloomer/dsh-impeccable-hook`，首个提交 `f4400dc`，默认分支 `main` |
 | AC7：推后用**干净 profile** `dsh plugin add github:…` | ✅ 已完成 | 隔离 `DSH_HOME` + `github:` spec 真装成功，详见 `acceptance-evidence.md` §九 |
-| `.github/workflows/verify.yml` **未入库** | ⚠️ 待补推 | 当前 `gh` OAuth token 只有 `gist/read:org/repo`，缺 `workflow` scope，GitHub 拒收工作流文件；文件已在本地工作区，执行 `gh auth refresh -s workflow` 后补推即可 |
+| `.github/workflows/verify.yml` | ✅ 已入库（a20de38） | 用户补 `workflow` scope 后推送成功；首跑即暴露一个真实缺陷（见下） |
+| CI 首跑失败：`Cannot find module …/test` | ✅ 已修 | 根因 `scripts.test = "node --test test/"` 的**目录参数**在本机 node 26 可行、在 CI 的 node 22 不认；改为 `node --test`（自动发现），本地 92/92 不变 |
 | AC1 第④层：桌面端手敲 `/impeccable-hook status`，肉眼确认「实际路径 = 包内路径」与注入计数 | ⬜ 待人工 | 用户执行（headless 会话无命令回显） |
 | AC10 第④层：破坏 `tools/post-execute` 签名后，启动时看到那行 warning | ⬜ 待人工 | 可与上一条同场做 |
 | `findPluginEntry` 的 `options.name` **端到端** | ⬜ 无法实测 | 本 profile 未安装本插件（`Config` provider `entries` 为空）；装插件后 `on`/`off` 顺手验一次真持久化 |

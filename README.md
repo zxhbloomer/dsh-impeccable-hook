@@ -61,7 +61,7 @@ dsh plugin --profile web add github:zxhbloomer/dsh-impeccable-hook
 
 卸载：`dsh plugin remove dsh-impeccable-hook`。
 
-> CI（`.github/workflows/verify.yml`）尚未入库：当前 `gh` token 缺 `workflow` scope，推不上去。执行 `gh auth refresh -s workflow` 后补推即可，功能不受影响（该文件只是把 `npm test` / `check-upstream` / `node --check` 搬进 CI）。
+> CI 已随仓库发布：`.github/workflows/verify.yml` 在每次推送时跑 `npm test`（node 22，ubuntu + windows 双平台）、`check-upstream.mjs` 与 `node --check`。
 
 ---
 
